@@ -1,0 +1,106 @@
+name: Build iOS IPA for AltStore
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle ID used before AltStore resigning"
+        required: true
+        default: "com.kogit.aichifantasytrpg"
+      bundle_version:
+        description: "Visible app version"
+        required: true
+        default: "1.0"
+
+jobs:
+  unity-export-ios:
+    name: Unity export iOS Xcode project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-iOS-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-iOS-
+
+      - name: Export iOS Xcode project
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.4.5f1
+          targetPlatform: iOS
+          buildMethod: AichiFantasy.Editor.AichiFantasyIosBuilder.BuildIosXcodeProject
+          customParameters: >-
+            -iosBuildPath build/iOS/AichiFantasyTRPG
+            -bundleId ${{ inputs.bundle_id }}
+            -bundleVersion ${{ inputs.bundle_version }}
+            -buildNumber ${{ github.run_number }}
+
+      - name: Upload Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: AichiFantasyTRPG-XcodeProject
+          path: build/iOS/AichiFantasyTRPG
+          retention-days: 14
+
+  package-unsigned-ipa:
+    name: Package unsigned IPA on macOS
+    runs-on: macos-15
+    needs: unity-export-ios
+    steps:
+      - name: Download Xcode project
+        uses: actions/download-artifact@v4
+        with:
+          name: AichiFantasyTRPG-XcodeProject
+          path: build/iOS/AichiFantasyTRPG
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build unsigned app
+        working-directory: build/iOS/AichiFantasyTRPG
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Unity-iPhone.xcodeproj \
+            -scheme Unity-iPhone \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ../../DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/DerivedData -path '*/Build/Products/Release-iphoneos/*.app' -maxdepth 8 -type d | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Release .app was not found."
+            exit 1
+          fi
+          rm -rf Payload AichiFantasyTRPG-AltStore.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          /usr/bin/zip -qry AichiFantasyTRPG-AltStore.ipa Payload
+          /usr/bin/ditto -c -k --keepParent "$APP_PATH" AichiFantasyTRPG-app.zip
+
+      - name: Upload AltStore IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AichiFantasyTRPG-AltStore-IPA
+          path: |
+            AichiFantasyTRPG-AltStore.ipa
+            AichiFantasyTRPG-app.zip
+          retention-days: 14

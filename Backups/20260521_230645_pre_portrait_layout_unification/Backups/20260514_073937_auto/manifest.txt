@@ -1,0 +1,7 @@
+Aichi Fantasy TRPG backup
+Created: 2026-05-14T07:39:37.8677564+09:00
+Reason: auto
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity

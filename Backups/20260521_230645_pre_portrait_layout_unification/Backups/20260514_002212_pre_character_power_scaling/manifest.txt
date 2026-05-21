@@ -1,0 +1,8 @@
+﻿Aichi Fantasy TRPG backup
+Created: 
+2026-05-14T00:22:12.4614171+09:00
+Reason: pre_character_power_scaling
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity

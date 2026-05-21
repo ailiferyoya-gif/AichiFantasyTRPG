@@ -1,0 +1,8 @@
+﻿Aichi Fantasy TRPG backup
+Created: 
+2026-05-14T00:05:50.8472592+09:00
+Reason: pre_fun_systems_gear_skills_boss_events
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity

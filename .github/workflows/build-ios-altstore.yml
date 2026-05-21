@@ -1,0 +1,276 @@
+name: Build iOS IPA for AltStore
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle ID used before AltStore resigning"
+        required: true
+        default: "com.kogit.aichifantasytrpg"
+      bundle_version:
+        description: "Visible app version"
+        required: true
+        default: "1.0"
+      publish_release:
+        description: "Publish IPA and AltStore source JSON to the fixed GitHub Release"
+        required: true
+        type: boolean
+        default: true
+
+jobs:
+  unity-export-ios:
+    name: Unity export iOS Xcode project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-iOS-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          restore-keys: |
+            Library-iOS-
+
+      - name: Export iOS Xcode project
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.4.5f1
+          targetPlatform: iOS
+          buildMethod: AichiFantasy.Editor.AichiFantasyIosBuilder.BuildIosXcodeProject
+          customParameters: >-
+            -iosBuildPath build/iOS/AichiFantasyTRPG
+            -bundleId ${{ inputs.bundle_id }}
+            -bundleVersion ${{ inputs.bundle_version }}
+            -buildNumber ${{ github.run_number }}
+
+      - name: Upload Xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: AichiFantasyTRPG-XcodeProject
+          path: build/iOS/AichiFantasyTRPG
+          retention-days: 14
+
+  package-unsigned-ipa:
+    name: Package unsigned IPA on macOS
+    runs-on: macos-15
+    needs: unity-export-ios
+    steps:
+      - name: Download Xcode project
+        uses: actions/download-artifact@v4
+        with:
+          name: AichiFantasyTRPG-XcodeProject
+          path: build/iOS/AichiFantasyTRPG
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Build unsigned app
+        working-directory: build/iOS/AichiFantasyTRPG
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project Unity-iPhone.xcodeproj \
+            -scheme Unity-iPhone \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath ../../DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/DerivedData -type d -path '*/Build/Products/Release-iphoneos/*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Release .app was not found."
+            exit 1
+          fi
+          rm -rf Payload AichiFantasyTRPG-AltStore.ipa
+          mkdir Payload
+          cp -R "$APP_PATH" Payload/
+          /usr/bin/zip -qry AichiFantasyTRPG-AltStore.ipa Payload
+          /usr/bin/ditto -c -k --keepParent "$APP_PATH" AichiFantasyTRPG-app.zip
+          ICON_SOURCE="$(find build/iOS/AichiFantasyTRPG -path '*AppIcon.appiconset/*.png' -type f | head -n 1)"
+          if [ -n "$ICON_SOURCE" ]; then
+            cp "$ICON_SOURCE" AichiFantasyTRPG-icon.png
+          fi
+          if [ ! -f AichiFantasyTRPG-icon.png ]; then
+            cp build/iOS/AichiFantasyTRPG/Unity-iPhone/LaunchScreen-iPhone.png AichiFantasyTRPG-icon.png 2>/dev/null || true
+          fi
+          if [ ! -f AichiFantasyTRPG-icon.png ]; then
+            python3 - <<'PY'
+          import base64
+          data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lFAwGQAAAABJRU5ErkJggg=="
+          with open("AichiFantasyTRPG-icon.png", "wb") as f:
+              f.write(base64.b64decode(data))
+          PY
+          fi
+
+      - name: Upload AltStore IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: AichiFantasyTRPG-AltStore-IPA
+          path: |
+            AichiFantasyTRPG-AltStore.ipa
+            AichiFantasyTRPG-app.zip
+            AichiFantasyTRPG-icon.png
+          retention-days: 14
+
+      - name: Create AltStore source JSON
+        run: |
+          set -euo pipefail
+          TAG="altstore-latest"
+          IPA_NAME="AichiFantasyTRPG-AltStore.ipa"
+          ICON_NAME="AichiFantasyTRPG-icon.png"
+          IPA_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${IPA_NAME}"
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/altstore-source.json"
+          ICON_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ICON_NAME}"
+          IPA_SIZE="$(stat -f%z "${IPA_NAME}")"
+          RELEASE_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 - <<PY
+          import json
+          source = {
+              "name": "Aichi Fantasy TRPG",
+              "subtitle": "iPhone test builds for Aichi Fantasy TRPG.",
+              "description": "Unity iOS test builds distributed for AltStore/AltStore Classic testing.",
+              "sourceURL": "${SOURCE_URL}",
+              "iconURL": "${ICON_URL}",
+              "tintColor": "#C89A4B",
+              "featuredApps": ["${{ inputs.bundle_id }}"],
+              "apps": [
+                  {
+                      "name": "AichiFantasyTRPG",
+                      "bundleIdentifier": "${{ inputs.bundle_id }}",
+                      "developerName": "kogit",
+                      "subtitle": "Aichi occult route TRPG.",
+                      "localizedDescription": "A dark Aichi-themed trial-and-error TRPG built with Unity.",
+                      "iconURL": "${ICON_URL}",
+                      "tintColor": "#C89A4B",
+                      "category": "games",
+                      "versions": [
+                          {
+                              "version": "${{ inputs.bundle_version }}",
+                              "buildVersion": "${{ github.run_number }}",
+                              "date": "${RELEASE_DATE}",
+                              "localizedDescription": "GitHub Actions iOS test build.",
+                              "downloadURL": "${IPA_URL}",
+                              "size": int("${IPA_SIZE}"),
+                              "minOSVersion": "15.0"
+                          }
+                      ],
+                      "appPermissions": {
+                          "entitlements": [],
+                          "privacy": {}
+                      }
+                  }
+              ],
+              "news": [
+                  {
+                      "title": "New iOS Test Build",
+                      "identifier": "aichi-fantasy-${{ github.run_number }}",
+                      "caption": "A fresh iPhone test build is available.",
+                      "date": "${RELEASE_DATE}",
+                      "tintColor": "#C89A4B",
+                      "appID": "${{ inputs.bundle_id }}"
+                  }
+              ]
+          }
+          with open("altstore-source.json", "w", encoding="utf-8") as f:
+              json.dump(source, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+
+      - name: Validate IPA and AltStore source JSON
+        run: |
+          set -euo pipefail
+          test -s AichiFantasyTRPG-AltStore.ipa
+          test -s AichiFantasyTRPG-icon.png
+          test -s altstore-source.json
+          unzip -l AichiFantasyTRPG-AltStore.ipa | grep -E 'Payload/.+\.app/'
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          source = json.loads(Path("altstore-source.json").read_text(encoding="utf-8"))
+          assert source.get("name"), "source.name is required"
+          assert source.get("apps"), "source.apps is required"
+
+          app = source["apps"][0]
+          assert app.get("name"), "app.name is required"
+          assert app.get("bundleIdentifier"), "app.bundleIdentifier is required"
+          assert app.get("developerName"), "app.developerName is required"
+          assert app.get("iconURL", "").startswith("https://"), "app.iconURL must be https"
+          assert "appPermissions" in app, "appPermissions is required by AltStore"
+
+          version = app["versions"][0]
+          assert version.get("downloadURL", "").endswith(".ipa"), "downloadURL must point to the IPA"
+          assert version.get("downloadURL", "").startswith("https://"), "downloadURL must be https"
+          assert int(version.get("size", 0)) > 0, "version.size must be > 0"
+          assert version.get("version"), "version is required"
+          assert version.get("buildVersion"), "buildVersion is required"
+          print("AltStore source JSON OK:", app["bundleIdentifier"], version["version"], version["buildVersion"])
+          PY
+
+      - name: Publish fixed AltStore release
+        if: ${{ inputs.publish_release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="altstore-latest"
+          gh release delete "${TAG}" --yes --cleanup-tag || true
+          gh release create "${TAG}" \
+            --title "AichiFantasyTRPG AltStore Latest" \
+            --notes "Latest AltStore test build generated by GitHub Actions run ${GITHUB_RUN_NUMBER}." \
+            AichiFantasyTRPG-AltStore.ipa \
+            AichiFantasyTRPG-app.zip \
+            altstore-source.json \
+            AichiFantasyTRPG-icon.png
+
+      - name: Write AltStore summary
+        run: |
+          set -euo pipefail
+          TAG="altstore-latest"
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/altstore-source.json"
+          IPA_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/AichiFantasyTRPG-AltStore.ipa"
+          {
+            echo "## AichiFantasyTRPG iOS Build"
+            echo ""
+            echo "- Bundle ID: \`${{ inputs.bundle_id }}\`"
+            echo "- Version: \`${{ inputs.bundle_version }}\`"
+            echo "- Build: \`${{ github.run_number }}\`"
+            echo ""
+            if [ "${{ inputs.publish_release }}" = "true" ]; then
+              echo "### AltStore Source URL"
+              echo ""
+              echo "\`\`\`text"
+              echo "${SOURCE_URL}"
+              echo "\`\`\`"
+              echo ""
+              echo "### Direct IPA URL"
+              echo ""
+              echo "${IPA_URL}"
+            else
+              echo "Release publishing was disabled. Download the IPA and source JSON from this run's artifacts."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload AltStore source JSON artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AichiFantasyTRPG-AltStore-Source
+          path: altstore-source.json
+          retention-days: 14

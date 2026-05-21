@@ -1,0 +1,9 @@
+﻿Aichi Fantasy TRPG backup
+Created: 
+2026-05-13T22:25:18.3389435+09:00
+Reason: pre_loot_message_portrait_end_polish
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity
+Assets/Resources/AichiFantasy/Portraits

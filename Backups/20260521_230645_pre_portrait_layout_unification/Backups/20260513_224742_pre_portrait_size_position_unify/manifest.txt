@@ -1,0 +1,9 @@
+﻿Aichi Fantasy TRPG backup
+Created: 
+2026-05-13T22:47:42.7666201+09:00
+Reason: pre_portrait_size_position_unify
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity
+Assets/Resources/AichiFantasy/Portraits

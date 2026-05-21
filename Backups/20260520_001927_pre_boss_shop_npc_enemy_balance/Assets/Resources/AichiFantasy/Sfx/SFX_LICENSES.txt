@@ -1,0 +1,9 @@
+walk.mp3
+Source: Mixkit - Footsteps on tall grass
+URL: https://mixkit.co/free-sound-effects/footsteps/
+License: Mixkit free sound effects license. Mixkit states sound effects are royalty-free, usable in commercial and personal projects, and do not require attribution.
+
+event_ominous.mp3
+Source: Mixkit - Horror sound effects category
+URL: https://mixkit.co/free-sound-effects/horror/
+License: Mixkit free sound effects license. Mixkit states sound effects are royalty-free, usable in commercial and personal projects, and do not require attribution.

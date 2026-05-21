@@ -1,0 +1,4 @@
+﻿Aichi Fantasy TRPG backup
+Created: 2026-05-10T08:48:25.7599724+09:00
+Reason: pre_cthulhu_enemy_portraits
+Includes: game script, scene builder, main scene, portraits

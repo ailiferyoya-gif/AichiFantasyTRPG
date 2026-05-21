@@ -1,0 +1,4 @@
+﻿Aichi Fantasy TRPG backup
+Created: 2026-05-10T08:31:32.3955226+09:00
+Reason: pre_detailed_enemy_portraits
+Includes: game script, scene builder, main scene, portraits

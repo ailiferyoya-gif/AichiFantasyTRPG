@@ -1,0 +1,9 @@
+﻿Aichi Fantasy TRPG backup
+Created: 
+2026-05-14T00:36:53.9534634+09:00
+Reason: pre_final_character_boss_rush
+Files:
+Assets/Scripts/AichiFantasyGame.cs
+Assets/Editor/AichiFantasySceneBuilder.cs
+Assets/AichiFantasyMain.unity
+Assets/Resources/AichiFantasy/Portraits
