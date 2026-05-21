@@ -1,12 +1,14 @@
 # iPhone / AltStore Test Build
 
 ## 目的
-GitHub ActionsでiOS向けUnityビルドを作り、AltStoreへ渡せる `.ipa` とAltStore Source JSONをGitHub Releaseに並べる。
+GitHub ActionsでUnityのiOS向けXcodeプロジェクトを作成し、GitHubのmacOS runnerで未署名IPAを組み立て、AltStoreで再署名してiPhoneへ入れられる形にする。
+
+Mac本体は不要。Macが必要な工程はGitHub ActionsのmacOS環境で実行する。
 
 ## 追加済みの仕組み
 - Unity 6000.4.5f1でiOS Xcodeプロジェクトを書き出す。
-- GitHubのmacOS runnerで署名なし `.app` を作る。
-- `Payload/*.app` 形式でzipし、AltStore向け `.ipa` を作る。
+- macOS runnerで未署名の `.app` を作る。
+- `Payload/*.app` 形式でzip化し、AltStore向け `.ipa` を作る。
 - 固定Release `altstore-latest` に以下を公開する。
   - `AichiFantasyTRPG-AltStore.ipa`
   - `altstore-source.json`
@@ -15,46 +17,65 @@ GitHub ActionsでiOS向けUnityビルドを作り、AltStoreへ渡せる `.ipa` 
 ## GitHub Secrets
 Repository Settings > Secrets and variables > Actions に以下を登録する。
 
-- `UNITY_LICENSE`
-- `UNITY_EMAIL`
-- `UNITY_PASSWORD`
+| Name | Secretに入れる内容 |
+| --- | --- |
+| `UNITY_LICENSE` | Windows上のUnity Hubで発行された `.ulf` ファイルの中身全部 |
+| `UNITY_EMAIL` | Unityアカウントのメールアドレス |
+| `UNITY_PASSWORD` | Unityアカウントのパスワード |
 
-Unity Personalの場合は、GameCIのUnity activation手順で取得した `.ulf` の中身を `UNITY_LICENSE` に入れる。
+## UNITY_LICENSEの取り方
+GameCIの現在の手順では、古い `.alf` 作成Actionは使用しない。
+Windows上のUnity HubでPersonalライセンスを有効化し、生成された `.ulf` を使う。
 
-## 実行手順
-1. このプロジェクトをGitHubへpushする。
-2. GitHubのActionsタブを開く。
-3. `Build iOS IPA for AltStore` を選ぶ。
-4. `Run workflow` を押す。
-5. `bundle_id` は基本 `com.kogit.aichifantasytrpg` のままでよい。
-6. 成功後、Release `altstore-latest` が作り直される。
-7. Actionsの実行SummaryにAltStore Source URLとDirect IPA URLが表示される。
+1. WindowsでUnity Hubを開く。
+2. Unityアカウントでログインする。
+3. `Preferences` > `Licenses` を開く。
+4. `Add` を押す。
+5. `Get a free personal license` を選んで有効化する。
+6. 次のファイルを開く。
 
-## AltStoreへ追加するURL
+```text
+C:\ProgramData\Unity\Unity_lic.ulf
+```
+
+`ProgramData` は隠しフォルダなので、見えない場合はエクスプローラーで隠しファイルを表示する。
+
+7. `Unity_lic.ulf` をメモ帳で開く。
+8. 中身を全部コピーする。
+9. GitHub Secret `UNITY_LICENSE` に貼り付ける。
+
+## iOS IPAビルド手順
+1. GitHubのリポジトリを開く。
+2. `Settings` > `Secrets and variables` > `Actions` を開く。
+3. `UNITY_LICENSE`、`UNITY_EMAIL`、`UNITY_PASSWORD` を登録する。
+4. `Actions` タブを開く。
+5. `Build iOS IPA for AltStore` を選ぶ。
+6. `Run workflow` を押す。
+7. `bundle_id` は基本的に `com.kogit.aichifantasytrpg` のままでよい。
+8. 成功後、Release `altstore-latest` が作られる。
+9. ActionsのSummaryにAltStore Source URLとDirect IPA URLが表示される。
+
+## AltStoreに追加するURL
 Release公開後、AltStoreのSourcesへ以下を追加する。
 
 ```text
-https://github.com/<OWNER>/<REPO>/releases/download/altstore-latest/altstore-source.json
+https://github.com/ailiferyoya-gif/AichiFantasyTRPG/releases/download/altstore-latest/altstore-source.json
 ```
 
-`<OWNER>/<REPO>` は実際のGitHubリポジトリ名に置き換える。
-
-ActionsのSummaryにも同じURLが出る。
-
-## 直接IPAを入れる場合
-ReleaseまたはActions artifactから以下を取得してAltStoreへ渡す。
+## 直接IPAを使う場合
+ReleaseまたはActions artifactから以下を取得する。
 
 ```text
 AichiFantasyTRPG-AltStore.ipa
 ```
 
 ## 注意
-- このworkflowはApp Store配布用の正式署名IPAではない。
+- このworkflowはApp Store配布用の正式署名IPAを作るものではない。
 - AltStore側でApple IDを使って再署名してインストールする前提。
-- GitHub Releaseがprivate repoの場合、iPhone側からSource JSONやIPAへ直接アクセスできない場合がある。確実にAltStore Sourceとして使うならpublic repoか、公開可能な配布先へ置く。
-- Apple Developer Programの証明書とProvisioning Profileで正式署名したい場合は、署名済みIPA用の別workflowに分ける。
-- Source JSONはCI内で最低限の構造検査を行う。AltStoreで追加できない場合は、Release assetの公開範囲、Bundle ID、IPAの署名状態を確認する。
+- Unity PersonalライセンスでGitHub Actionsが通らない場合は、Unity側のライセンス制限が原因の可能性がある。
+- その場合の現実的な代替は、Unity Pro/Plusのシリアルを使う、またはUnity Build AutomationなどUnity公式のクラウドビルドへ寄せること。
+- `game-ci/unity-request-activation-file@v2` は現在サポート外なので使用しない。
 
-## 追加ファイル
+## 関連ファイル
 - `.github/workflows/build-ios-altstore.yml`
 - `Assets/Editor/AichiFantasyIosBuilder.cs`
