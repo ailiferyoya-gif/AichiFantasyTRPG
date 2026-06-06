@@ -32,6 +32,7 @@ IPA導入前の画面確認用に、WebGLをGitHub Pagesへ公開するworkflow�
 - workflow: `.github/workflows/build-webgl-pages.yml`
 - build method: `AichiFantasy.Editor.AichiFantasyWebGlBuilder.BuildWebGlPlayer`
 - 手順: `WEBGL_IPHONE_PREVIEW.md`
+- iPhone Safariのロード中再読み込み対策として、WebGLビルド時だけ画像を最大512pxへ縮小/圧縮し、Data Cachingを無効化している。
 
 ## 今回のバックアップ
 
@@ -43,4 +44,4 @@ C:\Users\kogit\Documents\Codex\AichiFantasyTRPG\Backups\20260606_212725_pre_ios_
 
 ## 引継ぎ
 
-`AichiFantasyTRPG` をiOS用に実装。Unity側ではSafe Area対応とiOS build settingsを追加し、GitHub ActionsではiOS exportをmacOS runnerに変更してXcode project検証を追加した。さらにiPhone Safari確認用のWebGL Pages workflowも追加した。次はGitHub Actionsで `Build WebGL iPhone Preview` を実行してiPhone SafariでUI確認し、その後 `Build iOS IPA for AltStore` でIPA生成を確認する。
+`AichiFantasyTRPG` をiOS用に実装。Unity側ではSafe Area対応とiOS build settingsを追加し、GitHub ActionsではiOS exportをmacOS runnerに変更してXcode project検証を追加した。さらにiPhone Safari確認用のWebGL Pages workflowも追加した。ロード中再読み込み対策としてWebGL専用の画像軽量化とキャッシュ無効化を追加済み。次はGitHub Actionsで `Build WebGL iPhone Preview` を実行してiPhone SafariでUI確認し、その後 `Build iOS IPA for AltStore` でIPA生成を確認する。

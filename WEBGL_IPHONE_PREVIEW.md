@@ -37,6 +37,7 @@ https://github.com/ailiferyoya-gif/AichiFantasyTRPG/actions/runs/27062747042
 - WebGL確認はWeb版の確認であり、AltStore/IPAのネイティブ動作確認とは別。
 - iPhone Safariでは音声再生が初回タップ後に始まる場合がある。
 - WebGLは端末性能やSafari設定により読み込みに時間がかかることがある。
+- ロード中にSafariが再読み込みする場合に備えて、WebGLビルドでは画像をWebGL専用に圧縮/縮小し、Data Cachingを無効化している。
 
 ## 今回のバックアップ
 
