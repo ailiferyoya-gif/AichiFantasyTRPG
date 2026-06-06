@@ -12,6 +12,18 @@ iOSアプリとしてIPAを入れる前に、iPhone Safariで画面サイズ、�
 4. `Run workflow` を押す。
 5. 成功後、Actions SummaryのURLをiPhone Safariで開く。
 
+公開URL:
+
+```text
+https://ailiferyoya-gif.github.io/AichiFantasyTRPG/
+```
+
+最新の成功run:
+
+```text
+https://github.com/ailiferyoya-gif/AichiFantasyTRPG/actions/runs/27062747042
+```
+
 ## 確認ポイント
 
 - タイトル、ステータス、選択肢がiPhone画面内に収まるか。
