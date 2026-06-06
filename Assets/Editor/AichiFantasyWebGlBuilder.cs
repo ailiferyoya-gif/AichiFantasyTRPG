@@ -52,7 +52,34 @@ namespace AichiFantasy.Editor
             if (summary.result != BuildResult.Succeeded)
                 throw new Exception("WebGL build failed: " + summary.result + " / " + summary.totalErrors + " errors");
 
+            PatchIndexHtml(buildPath, GetArg("-webglCacheBust", DateTime.UtcNow.ToString("yyyyMMddHHmmss")));
+
             Debug.Log("Aichi Fantasy WebGL player exported: " + buildPath);
+        }
+
+        static void PatchIndexHtml(string buildPath, string cacheBust)
+        {
+            string indexPath = Path.Combine(buildPath, "index.html");
+            if (!File.Exists(indexPath))
+                return;
+
+            string html = File.ReadAllText(indexPath);
+            html = html.Replace(
+                "var loaderUrl = buildUrl + \"/WebGL.loader.js\";",
+                "var cacheBust = \"" + cacheBust + "\";\n      var loaderUrl = buildUrl + \"/WebGL.loader.js?v=\" + cacheBust;");
+            html = html.Replace(
+                "dataUrl: buildUrl + \"/WebGL.data\",",
+                "dataUrl: buildUrl + \"/WebGL.data?v=\" + cacheBust,");
+            html = html.Replace(
+                "frameworkUrl: buildUrl + \"/WebGL.framework.js\",",
+                "frameworkUrl: buildUrl + \"/WebGL.framework.js?v=\" + cacheBust,");
+            html = html.Replace(
+                "codeUrl: buildUrl + \"/WebGL.wasm\",",
+                "codeUrl: buildUrl + \"/WebGL.wasm?v=\" + cacheBust,");
+            html = html.Replace(
+                "        // config.devicePixelRatio = 1;",
+                "        config.devicePixelRatio = 1;");
+            File.WriteAllText(indexPath, html);
         }
 
         static void ConfigureWebGlTextures()
