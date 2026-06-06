@@ -23,7 +23,7 @@ on:
 jobs:
   unity-export-ios:
     name: Unity export iOS Xcode project
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,9 +34,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: Library
-          key: Library-iOS-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
+          key: Library-macOS-iOS-${{ hashFiles('Assets/**', 'Packages/**', 'ProjectSettings/**') }}
           restore-keys: |
-            Library-iOS-
+            Library-macOS-iOS-
 
       - name: Export iOS Xcode project
         uses: game-ci/unity-builder@v4
@@ -53,6 +53,13 @@ jobs:
             -bundleId ${{ inputs.bundle_id }}
             -bundleVersion ${{ inputs.bundle_version }}
             -buildNumber ${{ github.run_number }}
+
+      - name: Validate exported Xcode project
+        run: |
+          set -euo pipefail
+          test -f build/iOS/AichiFantasyTRPG/Unity-iPhone.xcodeproj/project.pbxproj
+          test -d build/iOS/AichiFantasyTRPG/Unity-iPhone
+          test -f build/iOS/AichiFantasyTRPG/Info.plist || test -f build/iOS/AichiFantasyTRPG/Unity-iPhone/Info.plist
 
       - name: Upload Xcode project
         uses: actions/upload-artifact@v4

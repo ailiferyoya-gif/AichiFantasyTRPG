@@ -16,12 +16,23 @@ namespace AichiFantasy.Editor
             string buildNumber = GetArg("-buildNumber", "1");
             string version = GetArg("-bundleVersion", "1.0");
 
+            if (!EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.iOS, BuildTarget.iOS))
+                throw new InvalidOperationException("Could not switch Unity build target to iOS.");
+
             AichiFantasySceneBuilder.BuildMainScene();
 
             PlayerSettings.companyName = "kogit";
             PlayerSettings.productName = "AichiFantasyTRPG";
             PlayerSettings.bundleVersion = version;
             PlayerSettings.SetApplicationIdentifier(BuildTargetGroup.iOS, bundleId);
+            PlayerSettings.SetScriptingBackend(BuildTargetGroup.iOS, ScriptingImplementation.IL2CPP);
+            PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.iOS, ApiCompatibilityLevel.NET_Standard);
+            PlayerSettings.stripEngineCode = true;
+            PlayerSettings.allowedAutorotateToPortrait = true;
+            PlayerSettings.allowedAutorotateToPortraitUpsideDown = false;
+            PlayerSettings.allowedAutorotateToLandscapeLeft = true;
+            PlayerSettings.allowedAutorotateToLandscapeRight = true;
+            PlayerSettings.defaultInterfaceOrientation = UIOrientation.AutoRotation;
             PlayerSettings.iOS.buildNumber = buildNumber;
             PlayerSettings.iOS.sdkVersion = iOSSdkVersion.DeviceSDK;
             PlayerSettings.iOS.targetOSVersionString = "15.0";

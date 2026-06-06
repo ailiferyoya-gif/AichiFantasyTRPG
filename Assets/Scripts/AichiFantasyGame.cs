@@ -10,6 +10,7 @@ namespace AichiFantasy
     public sealed class AichiFantasyGame : MonoBehaviour
     {
         const string SaveKey = "AichiFantasyTRPG.Progress";
+        const int MaxCharacterBoostLevel = 20;
         enum Mode
         {
             Title,
@@ -24,6 +25,9 @@ namespace AichiFantasy
         sealed class Progress
         {
             public int memoryFragments;
+            public int gachaTickets;
+            public int statCrystals;
+            public int legendaryShards;
             public int insuranceTickets;
             public int maxInstabilityUnlocked;
             public int piyorinVictories;
@@ -39,6 +43,11 @@ namespace AichiFantasy
             public List<string> brokenGear = new List<string>();
             public List<string> regretLog = new List<string>();
             public List<string> milestoneClaims = new List<string>();
+            public List<string> personalGoalClaims = new List<string>();
+            public List<string> eventChainClaims = new List<string>();
+            public List<string> characterStatBoosts = new List<string>();
+            public List<string> legendaryGearPurchases = new List<string>();
+            public int deathGearReturnLevel;
             public List<string> warehouseGear = new List<string>();
             public List<string> awakenedGear = new List<string>();
             public List<string> rememberedChoices = new List<string>();
@@ -162,6 +171,48 @@ namespace AichiFantasy
             public Action<RunState> success;
             public Action<RunState> fail;
         }
+        sealed class BonusEventChoice
+        {
+            public string label;
+            public string resultText;
+            public Action<RunState> effect;
+            public Func<RunState, bool> condition;
+            public string disabledReason;
+        }
+        sealed class BonusEventDef
+        {
+            public string id;
+            public string title;
+            public string area;
+            public string image;
+            public string portrait;
+            public string text;
+            public List<BonusEventChoice> choices = new List<BonusEventChoice>();
+        }
+        sealed class AchievementDef
+        {
+            public string id;
+            public string title;
+            public string description;
+            public int memoryReward;
+            public int insuranceReward;
+            public Func<bool> condition;
+        }
+        sealed class CharacterGoalDef
+        {
+            public string id;
+            public string characterId;
+            public string title;
+            public string description;
+            public int memoryReward;
+            public Func<string, string, bool> condition;
+        }
+        sealed class LegendaryGearOffer
+        {
+            public Gear gear;
+            public int cost;
+            public string description;
+        }
         sealed class RunState
         {
             public CharacterDef character;
@@ -193,6 +244,8 @@ namespace AichiFantasy
             public int restsUsed;
             public int sanityCollapseTurns = -1;
             public int finalRushIndex;
+            public int randomDungeonFloor;
+            public bool randomDungeonBossCleared;
             public int stageSeed;
             public string sanityCollapseReturnScene;
             public bool suppressSanityQueueOnce;
@@ -227,9 +280,7 @@ namespace AichiFantasy
         string endingBody;
         int lastReward;
         int selectedInstability;
-        int characterPage;
         int choicePage;
-        int warehouseGearPage;
         CharacterDef pendingCharacter;
         Canvas canvas;
         RawImage background;
@@ -263,6 +314,7 @@ namespace AichiFantasy
         Text footerText;
         RectTransform choiceRoot;
         RectTransform choiceContent;
+        RectTransform safeAreaRoot;
         Button[] choiceButtons;
         Text[] choiceButtonLabels;
         readonly List<ChoiceCommand> choiceCommands = new List<ChoiceCommand>();
@@ -274,6 +326,8 @@ namespace AichiFantasy
         int storyPageIndex;
         int lastScreenWidth;
         int lastScreenHeight;
+        Rect lastSafeArea;
+        bool safeAreaApplied;
         bool lastBattleActive;
         RectTransform battleRoot;
         Text battleText;
@@ -302,6 +356,7 @@ namespace AichiFantasy
         readonly Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
         readonly Dictionary<string, Sprite> portraitCache = new Dictionary<string, Sprite>();
         readonly System.Random rng = new System.Random();
+        const int MaxChoiceButtonSlots = 64;
         bool diceRolling;
         void Awake()
         {
@@ -313,7 +368,10 @@ namespace AichiFantasy
         }
         void Update()
         {
-            ApplyResponsiveLayout();
+            if (ApplySafeArea())
+                ApplyResponsiveLayout(true);
+            else
+                ApplyResponsiveLayout();
             RefreshStoryPagination();
             UpdateMadnessVisuals();
             if (mode != Mode.Battle || activeEnemy == null)
@@ -364,15 +422,19 @@ namespace AichiFantasy
             scaler.referenceResolution = new Vector2(1280, 720);
             scaler.matchWidthOrHeight = 0.5f;
             canvas.gameObject.AddComponent<GraphicRaycaster>();
-            var root = canvas.transform;
-            background = NewRawImage("Background", root, Color.black);
+            var canvasRoot = canvas.transform;
+            background = NewRawImage("Background", canvasRoot, Color.black);
             Stretch(background.rectTransform, 0, 0, 0, 0);
-            var veil = NewImage("BlueBlackVeil", root, new Color(0.02f, 0.015f, 0.03f, 0.32f));
+            var veil = NewImage("BlueBlackVeil", canvasRoot, new Color(0.02f, 0.015f, 0.03f, 0.32f));
             Stretch(veil.rectTransform, 0, 0, 0, 0);
-            vignette = NewImage("Vignette", root, new Color(0f, 0f, 0f, 0.42f));
+            vignette = NewImage("Vignette", canvasRoot, new Color(0f, 0f, 0f, 0.42f));
             Stretch(vignette.rectTransform, 0, 0, 0, 0);
-            madnessOverlay = NewImage("MadnessOverlay", root, new Color(0.35f, 0.02f, 0.04f, 0f));
+            madnessOverlay = NewImage("MadnessOverlay", canvasRoot, new Color(0.35f, 0.02f, 0.04f, 0f));
             Stretch(madnessOverlay.rectTransform, 0, 0, 0, 0);
+            safeAreaRoot = NewObject<RectTransform>("SafeArea", canvasRoot);
+            Stretch(safeAreaRoot, 0, 0, 0, 0);
+            ApplySafeArea(true);
+            var root = safeAreaRoot;
             topBarRoot = NewPanel("TopBar", root, new Color(0.015f, 0.012f, 0.018f, 0.78f));
             Anchor(topBarRoot, 0, 0.855f, 1, 0.975f, 18, 0, -18, -8);
             AddBorder(topBarRoot, new Color(0.75f, 0.52f, 0.22f, 0.25f));
@@ -462,8 +524,8 @@ namespace AichiFantasy
             choiceContent.offsetMin = new Vector2(10f, 0f);
             choiceContent.offsetMax = new Vector2(-10f, 0f);
             var choiceLayout = choiceContent.gameObject.AddComponent<VerticalLayoutGroup>();
-            choiceLayout.spacing = 8f;
-            choiceLayout.padding = new RectOffset(2, 2, 10, 10);
+            choiceLayout.spacing = 6f;
+            choiceLayout.padding = new RectOffset(2, 2, 8, 8);
             choiceLayout.childAlignment = TextAnchor.UpperCenter;
             choiceLayout.childControlWidth = true;
             choiceLayout.childControlHeight = true;
@@ -517,13 +579,15 @@ namespace AichiFantasy
         {
             clickSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/click");
             hitSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/hit");
-            hurtSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/hurt");
+            hurtSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/hurt_impact");
+            if (hurtSfx == null)
+                hurtSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/hurt");
             doomSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/doom");
             rewardSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/reward");
             whisperSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/whisper");
             pageSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/page");
             ambientSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/ambient");
-           walkSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/walk");
+            walkSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/walk");
             eventSfx = Resources.Load<AudioClip>("AichiFantasy/Sfx/event_ominous");
             if (ambientSfx != null && ambientSource != null)
             {
@@ -547,25 +611,44 @@ namespace AichiFantasy
                 "双鯱、味噌樽、工場心臓。知るほど正気は削られるが、知らなければ帰れない。";
             if (hpSlider != null) hpSlider.value = 0;
             if (hpText != null) hpText.text = "";
-            if (coinText != null) coinText.text = "● " + progress.memoryFragments;
-            statsText.text = "周回通貨: " + progress.memoryFragments + " 記憶片\n到達エンド: " + progress.endings.Count +
+            UpdateCurrencyText();
+            statsText.text = "周回通貨: " + progress.memoryFragments + " 記憶片 / ガチャ券 " + progress.gachaTickets + "\n能力結晶: " + progress.statCrystals + " / 伝説欠片: " + progress.legendaryShards + "\n到達エンド: " + progress.endings.Count +
                              "\n死因登録: " + progress.deaths.Count + "\n怪異遭遇: " + progress.seenMonsters.Count;
             inventoryText.text = "本番向け要素:\n死因図鑑\n怪異図鑑\n正気度UI変化\n名のない気配\n\n同梱SEはゲーム用に生成した仮素材です。";
             footerText.text = "暗いご当地ファンタジー / クトゥルフ風探索 / 連打バトル";
             ClearChoices();
             AddChoiceButton("はじめる", ShowInstabilitySelect);
-            AddChoiceButton("拠点/倉庫", ShowBase);
-            AddChoiceButton("図鑑と解放", ShowUnlocks);
-            AddChoiceButton("\u30c6\u30b9\u30c8\u7528: \u8a18\u61b6\u7247+3000", AddTestMemoryFragments);
+            AddChoiceButton("拠点/準備", ShowBaseHub);
+            AddChoiceButton("記録/図鑑", ShowUnlocks);
+            AddChoiceButton("管理", ShowManagementMenu);
+        }
+        void ShowManagementMenu()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "管理";
+            areaText.text = "テスト / 初期化";
+            bodyText.text = "通常プレイでは触らない項目です。\n\nテスト用の通貨追加や、進行データの初期化をここにまとめています。";
+            statsText.text = "記憶片 " + progress.memoryFragments + "\nガチャ券 " + progress.gachaTickets + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards;
+            inventoryText.text = "初期化は現在の進行を消します。確認はありません。";
+            ClearChoices();
+            AddChoiceButton("\u30c6\u30b9\u30c8\u7528: \u8a18\u61b6\u7247+3000\n券+300/素材+100", AddTestMemoryFragments);
             AddChoiceButton("進行を初期化", ResetProgress);
+            AddChoiceButton("タイトルへ", ShowTitle);
         }
         void AddTestMemoryFragments()
         {
             progress.memoryFragments += 3000;
+            progress.gachaTickets += 300;
+            progress.statCrystals += 100;
+            progress.legendaryShards += 60;
             SaveProgress();
             Play(rewardSfx);
             ShowTitle();
-            footerText.text = "\u30c6\u30b9\u30c8\u7528\u306b\u8a18\u61b6\u7247\u30923000\u8ffd\u52a0\u3057\u307e\u3057\u305f\u3002";
+            footerText.text = "テスト用に記憶片3000、ガチャ券300、能力結晶100、伝説欠片60を追加しました。";
         }
         void ShowInstabilitySelect()
         {
@@ -613,7 +696,7 @@ namespace AichiFantasy
         void ShowCharacterSelect()
         {
             mode = Mode.CharacterSelect;
-            SetBackground("characters");
+            SetBackground("character_select_trpg");
             SetPortrait("traveler");
             battleRoot.gameObject.SetActive(false);
             choiceRoot.gameObject.SetActive(true);
@@ -624,13 +707,8 @@ namespace AichiFantasy
             inventoryText.text = "\u5883\u754c\u4e0d\u5b89\u5b9a\u5ea6:\n" + InstabilitySummary(selectedInstability);
             ClearChoices();
             var list = new List<CharacterDef>(characters.Values);
-            int pageSize = 5;
-            int maxPage = Mathf.Max(0, (list.Count - 1) / pageSize);
-            characterPage = Mathf.Clamp(characterPage, 0, maxPage);
-            bodyText.text += "\n\n\u30da\u30fc\u30b8 " + (characterPage + 1) + "/" + (maxPage + 1) + "\u3002\u672a\u89e3\u653e\u30ad\u30e3\u30e9\u306f\u5fc5\u8981\u306a\u8a18\u61b6\u7247\u3092\u8868\u793a\u3057\u307e\u3059\u3002";
-            int start = characterPage * pageSize;
-          int end = Mathf.Min(list.Count, start + pageSize);
-            for (int i = start; i < end; i++)
+            bodyText.text += "\n\n一覧はスクロールできます。未解放キャラは必要な記憶片を表示します。";
+            for (int i = 0; i < list.Count; i++)
             {
                 var character = list[i];
                 bool unlocked = progress.unlockedCharacters.Contains(character.id);
@@ -639,10 +717,6 @@ namespace AichiFantasy
                 string label = unlocked ? character.name + "\n" + compactStats : character.name + "\n\u672a\u89e3\u653e " + character.unlockCost + " \u8a18\u61b6\u7247";
                 AddChoiceButton(label, () => ShowCharacterConfirm(character));
             }
-            if (characterPage > 0)
-                AddChoiceButton("\u524d\u30da\u30fc\u30b8", () => { characterPage--; ShowCharacterSelect(); });
-            if (characterPage < maxPage)
-                AddChoiceButton("\u6b21\u30da\u30fc\u30b8", () => { characterPage++; ShowCharacterSelect(); });
             AddChoiceButton("\u96e3\u5ea6\u3078\u623b\u308b", ShowInstabilitySelect);
         }
         void ShowCharacterConfirm(CharacterDef character)
@@ -657,6 +731,7 @@ namespace AichiFantasy
             bodyText.text = unlockLine + "\n" + CharacterInvestmentRank(character) + "\n" + character.subtitle + "\n" + character.description + "\n\nHP " + s.maxHp + " / MP " + s.maxMp +
                 "\n\u653b\u6483 " + s.attack + " \u9632\u5fa1 " + s.defense + " \u901f\u3055 " + s.speed + " LUK " + s.luck +
                 "\nSAN " + s.maxSanity + " / \u5831\u916c\u500d\u7387 x" + character.rewardRate.ToString("0.00") +
+                "\n\n個人目標\n" + CharacterGoalLine(character) +
                 "\n\n持ち込みを選ばない場合、武器・防具・装飾はすべて装備なしで開始します。";
             statsText.text = character.name + "\nHP " + s.hp + "/" + s.maxHp + "  MP " + s.mp + "/" + s.maxMp +
                 "\n攻撃 " + s.attack + "  防御 " + s.defense +
@@ -667,10 +742,33 @@ namespace AichiFantasy
                 "\n機械 " + s.machineAptitude + " 神話 " + s.mythosKnowledge;
             ClearChoices();
             if (unlocked)
+            {
                 AddChoiceButton("\u3053\u306e\u30ad\u30e3\u30e9\u3067\u958b\u59cb", () => StartRun(pendingCharacter));
+                AddChoiceButton("完全ランダムダンジョンへ\n高難易度", () => StartRandomDungeonRun(pendingCharacter));
+            }
             else
                 AddChoiceButton("\u8a18\u61b6\u7247\u3067\u89e3\u653e", () => TryUnlockCharacter(pendingCharacter));
                             AddChoiceButton("\u4e00\u89a7\u3078\u623b\u308b", ShowCharacterSelect);
+        }
+        void StartRandomDungeonRun(CharacterDef character)
+        {
+            run = new RunState();
+            run.character = character;
+            run.stats = character.stats.Clone();
+            ApplyPermanentCharacterBoosts(character.id, run.stats);
+            run.weapon = EmptyGear("武器");
+            run.armor = EmptyGear("防具");
+            run.accessory = EmptyGear("装飾品");
+            run.sceneId = "random_dungeon";
+            run.instability = Mathf.Max(selectedInstability, 2);
+            run.randomDungeonFloor = 1;
+            run.stageSeed = rng.Next(100000, 999999);
+            run.flags.Add("random_dungeon");
+            if (character.id != "traveler")
+                run.dangerWarnings = 0;
+            ApplyCharacterStartTraits();
+            LogRun("完全ランダムダンジョン開始: 装備確認へ");
+            ShowStartingGearSelect();
         }
         string CharacterInvestmentRank(CharacterDef character)
         {
@@ -709,6 +807,27 @@ namespace AichiFantasy
             Play(rewardSfx);
             ShowCharacterSelect();
         }
+        void ShowBaseHub()
+        {
+            mode = Mode.Unlocks;
+            activeEnemy = null;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "拠点/準備";
+            areaText.text = "異界愛知対策室";
+            bodyText.text = "探索前の支度をここにまとめた。\n\n倉庫で装備を整え、ガチャで素材を得て、ボーナスショップで次の周回を強くする。";
+            statsText.text = "記憶片 " + progress.memoryFragments + "\nガチャ券 " + progress.gachaTickets + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards;
+            inventoryText.text = "倉庫装備: " + progress.warehouseGear.Count + "\n覚醒装備: " + progress.awakenedGear.Count + "\n保険札: " + progress.insuranceTickets;
+            ClearChoices();
+            AddChoiceButton("倉庫管理\n装備整理/覚醒", ShowBase);
+            AddChoiceButton("ガチャ\nチケット消費", ShowGachaMenu);
+            AddChoiceButton("記憶片ボーナスショップ\n恒久強化", ShowBonusShop);
+            AddChoiceButton("保険札を買う\n記憶片10", BuyInsurance);
+            AddChoiceButton("NPC依頼", ShowNpcRequests);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
         void ShowBase()
         {
             mode = Mode.Unlocks;
@@ -720,12 +839,197 @@ namespace AichiFantasy
             titleText.text = "拠点/倉庫";
             areaText.text = "異界愛知対策室";
             bodyText.text = "持ち帰った装備、NPC依頼、覚醒進捗を確認する。\n\n倉庫装備: " + progress.warehouseGear.Count + "\n覚醒装備: " + progress.awakenedGear.Count + "\n記憶した選択肢: " + progress.rememberedChoices.Count;
-            statsText.text = "記憶片 " + progress.memoryFragments + "\n保険札 " + progress.insuranceTickets;
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards + "\n保険札 " + progress.insuranceTickets;
             inventoryText.text = WarehouseSummary();
             ClearChoices();
             AddChoiceButton("倉庫装備を覚醒\n記憶片15", AwakenWarehouseGear);
+            AddChoiceButton("低レア装備を整理\n白/緑→記憶片", ShowSalvageLowRarityConfirm, progress.warehouseGear.Count > 0);
             AddChoiceButton("NPC依頼を見る", ShowNpcRequests);
+            AddChoiceButton("拠点/準備へ", ShowBaseHub);
             AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void ShowBonusShop()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "記憶片ボーナスショップ";
+            areaText.text = "恒久強化";
+            bodyText.text = "記憶片を使い、次の周回以降に残る支度を整える。\n\n" +
+                "キャラ強化: 選んだキャラだけ、開始時ステータスが上がる。\n" +
+                "帰還保証: 死亡時にも装備を倉庫へ戻せる確率と数が増える。\n" +
+                "能力結晶: 「キャラ別ステータス強化」で記憶片の代わりに使える。\n" +
+                "伝説欠片: 「伝説装備を見る」で記憶片の代わりに使える。";
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards + "\n保険札 " + progress.insuranceTickets;
+            inventoryText.text = BonusShopSummary();
+            ClearChoices();
+            AddChoiceButton("キャラ別ステータス強化", ShowBonusShopCharacterSelect);
+            AddChoiceButton("死亡時装備持ち帰り\n" + DeathGearReturnNextLabel(), BuyDeathGearReturnUpgrade, progress.deathGearReturnLevel < 3);
+            AddChoiceButton("伝説装備を見る\n一品物", ShowLegendaryGearShop);
+            AddChoiceButton("拠点/準備へ", ShowBaseHub);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void ShowGachaMenu()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("gacha_memory_shop");
+            SetPortrait("event_memory_vendor");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "記憶ガチャ";
+            areaText.text = "チケット交換";
+            bodyText.text = "完全ランダムダンジョンで手に入るガチャチケットを使う。\n\n排出: 装備 / 記憶片 / 能力結晶 / 伝説欠片。\n深層で拾ったチケットほど重い、という噂だけがある。";
+            statsText.text = "ガチャ券 " + progress.gachaTickets + "\n記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards;
+            inventoryText.text = "能力結晶: キャラ強化に使う。\n伝説欠片: 伝説装備と交換できる。\n装備は倉庫へ直接送られます。";
+            UpdateCurrencyText();
+            ClearChoices();
+            AddChoiceButton("1回引く\nチケット1", () => DrawGacha(1), progress.gachaTickets >= 1);
+            AddChoiceButton("10回引く\nチケット10", () => DrawGacha(10), progress.gachaTickets >= 10);
+            AddChoiceButton("拠点/準備へ", ShowBaseHub);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void DrawGacha(int count)
+        {
+            count = Mathf.Clamp(count, 1, 10);
+            if (progress.gachaTickets < count)
+            {
+                footerText.text = "ガチャチケットが足りません。";
+                Play(clickSfx);
+                return;
+            }
+            progress.gachaTickets -= count;
+            var results = new List<string>();
+            for (int i = 0; i < count; i++)
+                results.Add(DrawOneGachaResult());
+            SaveProgress();
+            Play(rewardSfx);
+            SetBackground("gacha_memory_shop");
+            SetPortrait("event_memory_vendor");
+            titleText.text = "ガチャ結果";
+            areaText.text = count + "回";
+            bodyText.text = string.Join("\n", results);
+            statsText.text = "ガチャ券 " + progress.gachaTickets + "\n記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals + "\n伝説欠片 " + progress.legendaryShards;
+            inventoryText.text = "素材は即時加算。装備は倉庫へ送られます。\n倉庫装備: " + progress.warehouseGear.Count;
+            ClearChoices();
+            AddChoiceButton("もう1回\nチケット1", () => DrawGacha(1), progress.gachaTickets >= 1);
+            AddChoiceButton("もう10回\nチケット10", () => DrawGacha(10), progress.gachaTickets >= 10);
+            AddChoiceButton("ガチャへ戻る", ShowGachaMenu);
+            AddChoiceButton("拠点/準備へ", ShowBaseHub);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        string DrawOneGachaResult()
+        {
+            int roll = rng.Next(100);
+            if (roll < 18)
+            {
+                int memory = rng.Next(1, 4);
+                if (rng.NextDouble() < 0.08)
+                    memory += 5;
+                progress.memoryFragments += memory;
+                return "・記憶片 +" + memory;
+            }
+            if (roll < 34)
+            {
+                int crystals = roll >= 30 ? 3 : rng.Next(1, 3);
+                progress.statCrystals += crystals;
+                return "・能力結晶 +" + crystals;
+            }
+            if (roll < 43)
+            {
+                int shards = roll >= 40 ? 3 : 1;
+                progress.legendaryShards += shards;
+                return "・伝説欠片 +" + shards;
+            }
+            int power = roll >= 96 ? 90 : roll >= 84 ? 56 : roll >= 58 ? 34 : 18;
+            Gear gear = GenerateRandomGear(power);
+            StoreGearWithoutSaving(gear);
+            string rarity = gear.rarity == "橙" ? "大当たり" : gear.rarity == "紫" ? "当たり" : gear.rarity == "緑" ? "良品" : "通常";
+            return "・[" + rarity + "] " + GearOneLine(gear);
+        }
+        void ShowLegendaryGearShop()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "伝説装備";
+            areaText.text = "記憶片 / 伝説欠片";
+            bodyText.text = BuildLegendaryGearShopText();
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n伝説欠片 " + progress.legendaryShards + "\n倉庫装備 " + progress.warehouseGear.Count;
+            inventoryText.text = "購入した伝説装備は倉庫へ直接送られます。同じ品も素材があれば再交換できます。";
+            ClearChoices();
+            foreach (var offer in LegendaryGearOffers())
+            {
+                bool bought = progress.legendaryGearPurchases.Contains(offer.gear.id);
+                string label = GearDisplayName(offer.gear) + "\n" + (bought ? "再交換可" : "未交換") + " / 記憶片" + offer.cost + " or 欠片" + LegendaryShardCost(offer);
+                AddChoiceButton(label, () => ShowLegendaryGearConfirm(offer));
+            }
+            AddChoiceButton("ショップへ戻る", ShowBonusShop);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void ShowLegendaryGearConfirm(LegendaryGearOffer offer)
+        {
+            if (offer == null || offer.gear == null)
+                return;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            titleText.text = "交換確認";
+            areaText.text = offer.gear.rarity + " / " + offer.gear.slot;
+            int shardCost = LegendaryShardCost(offer);
+            bodyText.text = "この伝説装備を交換しますか。\n\n" +
+                GearSummary(offer.gear) + "\n\n必要記憶片: " + offer.cost + "\n必要伝説欠片: " + shardCost +
+                "\n所持記憶片: " + progress.memoryFragments + "\n所持伝説欠片: " + progress.legendaryShards +
+                "\n\n購入すると倉庫へ直接送られます。同じ品も素材があれば再交換できます。";
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n伝説欠片 " + progress.legendaryShards;
+            inventoryText.text = offer.description;
+            ClearChoices();
+            AddChoiceButton("記憶片で交換\n" + offer.cost, () => BuyLegendaryGear(offer, false), progress.memoryFragments >= offer.cost);
+            AddChoiceButton("伝説欠片で交換\n" + shardCost, () => BuyLegendaryGear(offer, true), progress.legendaryShards >= shardCost);
+            AddChoiceButton("伝説装備一覧へ戻る", ShowLegendaryGearShop);
+            AddChoiceButton("ショップへ戻る", ShowBonusShop);
+        }
+        void ShowBonusShopCharacterSelect()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("character_select_trpg");
+            SetPortrait("traveler");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "キャラ別強化";
+            areaText.text = "対象を選択";
+            bodyText.text = "強化したいキャラクターを選ぶ。未解放キャラも先に育てられますが、使用するには通常通り解放が必要です。";
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals;
+            inventoryText.text = "強化はキャラごとに保存され、周回開始時に反映されます。能力結晶でも強化できます。";
+            ClearChoices();
+            foreach (var character in characters.Values)
+            {
+                string unlocked = progress.unlockedCharacters.Contains(character.id) ? "解放済" : "未解放";
+                AddChoiceButton(character.name + "\n" + unlocked + " / 強化合計 " + TotalCharacterBoostLevels(character.id), () => ShowBonusShopCharacter(character));
+            }
+            AddChoiceButton("ショップへ戻る", ShowBonusShop);
+        }
+        void ShowBonusShopCharacter(CharacterDef character)
+        {
+            pendingCharacter = character;
+            SetBackground("character_select_trpg");
+            SetPortrait(CharacterPortraitId(character.id));
+            titleText.text = character.name + "の強化";
+            areaText.text = "記憶片 / 能力結晶";
+            bodyText.text = CharacterBoostDetail(character);
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n能力結晶 " + progress.statCrystals + "\n" + CharacterBoostCompact(character.id);
+            inventoryText.text = "上限は各項目" + MaxCharacterBoostLevel + "段階。HPとSANは1段階で+3、その他は+1。能力結晶があれば記憶片の代わりに消費します。";
+            ClearChoices();
+            AddChoiceButton("HPを上げる\n" + StatBoostNextLabel(character.id, "hp"), () => BuyCharacterStatBoost(character.id, "hp"));
+            AddChoiceButton("攻撃を上げる\n" + StatBoostNextLabel(character.id, "attack"), () => BuyCharacterStatBoost(character.id, "attack"));
+            AddChoiceButton("防御を上げる\n" + StatBoostNextLabel(character.id, "defense"), () => BuyCharacterStatBoost(character.id, "defense"));
+            AddChoiceButton("速さを上げる\n" + StatBoostNextLabel(character.id, "speed"), () => BuyCharacterStatBoost(character.id, "speed"));
+            AddChoiceButton("LUKを上げる\n" + StatBoostNextLabel(character.id, "luck"), () => BuyCharacterStatBoost(character.id, "luck"));
+            AddChoiceButton("SANを上げる\n" + StatBoostNextLabel(character.id, "sanity"), () => BuyCharacterStatBoost(character.id, "sanity"));
+            AddChoiceButton("キャラ一覧へ", ShowBonusShopCharacterSelect);
+            AddChoiceButton("ショップへ戻る", ShowBonusShop);
         }
         string WarehouseSummary()
         {
@@ -735,9 +1039,54 @@ namespace AichiFantasy
             for (int i = Mathf.Max(0, progress.warehouseGear.Count - 5); i < progress.warehouseGear.Count; i++)
             {
                 var gear = DeserializeGear(progress.warehouseGear[i]);
-                text += "・" + (gear != null ? gear.name + " [" + gear.rarity + "]" : progress.warehouseGear[i]) + "\n";
+                text += "・" + (gear != null ? GearDisplayName(gear) + " [" + gear.rarity + "]" : progress.warehouseGear[i]) + "\n";
             }
             return text;
+        }
+        void ShowSalvageLowRarityConfirm()
+        {
+            int count;
+            int value;
+            CountLowRaritySalvage(out count, out value);
+            if (count <= 0)
+            {
+                footerText.text = "白/緑の整理対象装備はありません。";
+                Play(clickSfx);
+                return;
+            }
+            mode = Mode.Unlocks;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "倉庫整理の確認";
+            areaText.text = "白/緑装備を記憶片へ";
+            bodyText.text = "倉庫内の白/緑レア装備をまとめて整理します。\n\n対象装備: " + count + "個\n獲得予定: 記憶片+" + value +
+                "\n\n紫/橙、伝説装備は残ります。整理した装備は戻せません。";
+            statsText.text = "倉庫装備 " + progress.warehouseGear.Count + "\n記憶片 " + progress.memoryFragments;
+            inventoryText.text = WarehouseSummary();
+            ClearChoices();
+            AddChoiceButton("整理する\n記憶片+" + value, SalvageLowRarityWarehouseGear);
+            AddChoiceButton("やめる", ShowBase);
+        }
+        void CountLowRaritySalvage(out int count, out int value)
+        {
+            count = 0;
+            value = 0;
+            for (int i = 0; i < progress.warehouseGear.Count; i++)
+            {
+                var gear = DeserializeGear(progress.warehouseGear[i]);
+                if (gear == null)
+                {
+                    count++;
+                    continue;
+                }
+                if (gear.rarity == "白" || gear.rarity == "緑")
+                {
+                    count++;
+                    value += SalvageValue(gear);
+                }
+            }
         }
         void AwakenWarehouseGear()
         {
@@ -757,10 +1106,55 @@ namespace AichiFantasy
             gear.note += " 覚醒済み。";
             ApplyGearRarity(gear);
             progress.warehouseGear[index] = SerializeGear(gear);
-            progress.awakenedGear.Add(gear.name);
+            progress.awakenedGear.Add(SerializeGear(gear));
             SaveProgress();
             Play(rewardSfx);
             ShowBase();
+        }
+        void SalvageLowRarityWarehouseGear()
+        {
+            if (progress.warehouseGear.Count == 0)
+            {
+                footerText.text = "整理できる装備がありません。";
+                Play(clickSfx);
+                return;
+            }
+            int gained = 0;
+            int removed = 0;
+            for (int i = progress.warehouseGear.Count - 1; i >= 0; i--)
+            {
+                var gear = DeserializeGear(progress.warehouseGear[i]);
+                if (gear == null)
+                {
+                    progress.warehouseGear.RemoveAt(i);
+                    removed++;
+                    continue;
+                }
+                if (gear.rarity == "白" || gear.rarity == "緑")
+                {
+                    gained += SalvageValue(gear);
+                    progress.warehouseGear.RemoveAt(i);
+                    removed++;
+                }
+            }
+            if (removed <= 0)
+            {
+                footerText.text = "白/緑の整理対象装備はありません。";
+                Play(clickSfx);
+                return;
+            }
+            progress.memoryFragments += gained;
+            SaveProgress();
+            Play(rewardSfx);
+            ShowBase();
+            footerText.text = "低レア装備を" + removed + "個整理し、記憶片+" + gained + "を得ました。";
+        }
+        int SalvageValue(Gear gear)
+        {
+            if (gear == null)
+                return 0;
+            int baseValue = gear.rarity == "緑" ? 4 : 1;
+            return Mathf.Clamp(baseValue + gear.score / 18, baseValue, gear.rarity == "緑" ? 9 : 4);
         }
         void ShowNpcRequests()
         {
@@ -768,13 +1162,14 @@ namespace AichiFantasy
             bodyText.text = "喫茶店員: 小倉の印を3つ集める\nオカルト研究者: 神話理解を5以上にする\n空港職員: 検査官を突破する\n\n依頼は周回中の行動で関係値が上がり、日報と報酬に反映されます。";
             inventoryText.text = "関係値は周回ごとに変動します。今後は永続NPC好感度へ拡張可能。";
             ClearChoices();
-            AddChoiceButton("拠点へ戻る", ShowBase);
+            AddChoiceButton("拠点/準備へ戻る", ShowBaseHub);
         }
         void StartRun(CharacterDef character)
         {
             run = new RunState();
             run.character = character;
             run.stats = character.stats.Clone();
+            ApplyPermanentCharacterBoosts(character.id, run.stats);
             run.weapon = EmptyGear("武器");
             run.armor = EmptyGear("防具");
             run.accessory = EmptyGear("装飾品");
@@ -848,21 +1243,25 @@ namespace AichiFantasy
                     run.flags.Add("skill_border_staff");
                     run.npcAirport += 3;
                     run.dangerWarnings += 2;
+                    run.flags.Add("skill_airport_priority");
                     break;
                 case "arimatsu_weaver":
                     run.flags.Add("skill_thread_sight");
                     run.stats.luck += 1;
                     run.stats.localKnowledge += 1;
+                    run.dangerWarnings += 1;
                     break;
                 case "inuyama_mask":
                     run.flags.Add("skill_mask_shift");
                     run.dangerWarnings += 1;
                     run.stats.luck += 1;
+                    run.flags.Add("skill_boss_mask");
                     break;
                 case "tsuruma_librarian":
                     run.flags.Add("skill_index_debt");
                     run.stats.mythosKnowledge += 2;
                     run.stats.sanity = Math.Max(1, run.stats.sanity - 1);
+                    run.flags.Add("skill_boss_index");
                     break;
                 case "final_observer":
                     run.flags.Add("skill_final_observer");
@@ -877,10 +1276,278 @@ namespace AichiFantasy
                     break;
             }
         }
+        void ApplyPermanentCharacterBoosts(string characterId, Stats stats)
+        {
+            if (stats == null)
+                return;
+            int hp = GetCharacterBoostLevel(characterId, "hp");
+            int sanity = GetCharacterBoostLevel(characterId, "sanity");
+            stats.maxHp += hp * 3;
+            stats.hp += hp * 3;
+            stats.attack += GetCharacterBoostLevel(characterId, "attack");
+            stats.defense += GetCharacterBoostLevel(characterId, "defense");
+            stats.speed += GetCharacterBoostLevel(characterId, "speed");
+            stats.luck += GetCharacterBoostLevel(characterId, "luck");
+            stats.maxSanity += sanity * 3;
+            stats.sanity += sanity * 3;
+        }
+        string BonusShopSummary()
+        {
+            return "帰還保証: " + DeathGearReturnLabel() +
+                "\n能力結晶: " + progress.statCrystals + "（キャラ別強化で使用）" +
+                "\n伝説欠片: " + progress.legendaryShards + "（伝説装備で使用）" +
+                "\n\n強化済みキャラ:\n" + CharacterBoostRosterSummary();
+        }
+        string CharacterBoostRosterSummary()
+        {
+            var lines = new List<string>();
+            foreach (var character in characters.Values)
+            {
+                int total = TotalCharacterBoostLevels(character.id);
+                if (total > 0)
+                    lines.Add("・" + character.name + " " + CharacterBoostCompact(character.id));
+            }
+            return lines.Count == 0 ? "なし" : string.Join("\n", lines);
+        }
+        string CharacterBoostDetail(CharacterDef character)
+        {
+            var preview = character.stats.Clone();
+            ApplyPermanentCharacterBoosts(character.id, preview);
+            return character.name + "\n" + character.description + "\n\n現在の恒久強化\n" + CharacterBoostCompact(character.id) +
+                "\n\n開始時ステータス見込み\nHP " + preview.maxHp + " / 攻撃 " + preview.attack + " / 防御 " + preview.defense +
+                "\n速さ " + preview.speed + " / LUK " + preview.luck + " / SAN " + preview.maxSanity;
+        }
+        string CharacterBoostCompact(string characterId)
+        {
+            return "HP+" + (GetCharacterBoostLevel(characterId, "hp") * 3) +
+                " 攻+" + GetCharacterBoostLevel(characterId, "attack") +
+                " 防+" + GetCharacterBoostLevel(characterId, "defense") +
+                " 速+" + GetCharacterBoostLevel(characterId, "speed") +
+                " LUK+" + GetCharacterBoostLevel(characterId, "luck") +
+                " SAN+" + (GetCharacterBoostLevel(characterId, "sanity") * 3);
+        }
+        int TotalCharacterBoostLevels(string characterId)
+        {
+            return GetCharacterBoostLevel(characterId, "hp") +
+                GetCharacterBoostLevel(characterId, "attack") +
+                GetCharacterBoostLevel(characterId, "defense") +
+                GetCharacterBoostLevel(characterId, "speed") +
+                GetCharacterBoostLevel(characterId, "luck") +
+                GetCharacterBoostLevel(characterId, "sanity");
+        }
+        string StatBoostNextLabel(string characterId, string stat)
+        {
+            int level = GetCharacterBoostLevel(characterId, stat);
+            if (level >= MaxCharacterBoostLevel)
+                return "最大";
+            return "Lv" + level + "→" + (level + 1) + " / 記憶片" + StatBoostCost(level) + " or 結晶" + StatCrystalCost(level);
+        }
+        int StatBoostCost(int currentLevel)
+        {
+            if (currentLevel < 5)
+                return 12 + currentLevel * 10;
+            return 70 + currentLevel * 18 + currentLevel * currentLevel * 3;
+        }
+        int StatCrystalCost(int currentLevel)
+        {
+            return Mathf.Clamp(1 + currentLevel / 3, 1, 8);
+        }
+        void BuyCharacterStatBoost(string characterId, string stat)
+        {
+            int level = GetCharacterBoostLevel(characterId, stat);
+            if (level >= MaxCharacterBoostLevel)
+            {
+                footerText.text = "この項目は最大強化です。";
+                Play(clickSfx);
+                return;
+            }
+            int cost = StatBoostCost(level);
+            int crystalCost = StatCrystalCost(level);
+            bool useCrystals = progress.statCrystals >= crystalCost;
+            if (!useCrystals && progress.memoryFragments < cost)
+            {
+                footerText.text = "素材が足りません。必要: 記憶片" + cost + " または 能力結晶" + crystalCost;
+                Play(clickSfx);
+                return;
+            }
+            if (useCrystals)
+                progress.statCrystals -= crystalCost;
+            else
+                progress.memoryFragments -= cost;
+            SetCharacterBoostLevel(characterId, stat, level + 1);
+            SaveProgress();
+            Play(rewardSfx);
+            ShowBonusShopCharacter(pendingCharacter);
+            footerText.text = "恒久強化: " + characters[characterId].name + "の" + StatLabel(stat) + "を強化しました。" + (useCrystals ? " 能力結晶を消費。" : " 記憶片を消費。");
+        }
+        int GetCharacterBoostLevel(string characterId, string stat)
+        {
+            if (progress.characterStatBoosts == null)
+                return 0;
+            string prefix = characterId + "|" + stat + "|";
+            foreach (string entry in progress.characterStatBoosts)
+            {
+                if (string.IsNullOrEmpty(entry) || !entry.StartsWith(prefix))
+                    continue;
+                int value;
+                if (int.TryParse(entry.Substring(prefix.Length), out value))
+                    return Mathf.Clamp(value, 0, MaxCharacterBoostLevel);
+            }
+            return 0;
+        }
+        void SetCharacterBoostLevel(string characterId, string stat, int level)
+        {
+            if (progress.characterStatBoosts == null)
+                progress.characterStatBoosts = new List<string>();
+            string prefix = characterId + "|" + stat + "|";
+            for (int i = progress.characterStatBoosts.Count - 1; i >= 0; i--)
+            {
+                if (!string.IsNullOrEmpty(progress.characterStatBoosts[i]) && progress.characterStatBoosts[i].StartsWith(prefix))
+                    progress.characterStatBoosts.RemoveAt(i);
+            }
+            progress.characterStatBoosts.Add(prefix + Mathf.Clamp(level, 0, MaxCharacterBoostLevel));
+        }
+        string StatLabel(string stat)
+        {
+            switch (stat)
+            {
+                case "hp": return "HP";
+                case "attack": return "攻撃";
+                case "defense": return "防御";
+                case "speed": return "速さ";
+                case "luck": return "LUK";
+                case "sanity": return "SAN";
+            }
+            return stat;
+        }
+        string DeathGearReturnLabel()
+        {
+            switch (progress.deathGearReturnLevel)
+            {
+                case 1: return "Lv1 死亡時、装備1つを35%で持ち帰る";
+                case 2: return "Lv2 死亡時、装備1つを70%で持ち帰る";
+                case 3: return "Lv3 死亡時、全装備を必ず持ち帰る";
+                default: return "未購入";
+            }
+        }
+        string DeathGearReturnNextLabel()
+        {
+            if (progress.deathGearReturnLevel >= 3)
+                return "最大";
+            return "Lv" + progress.deathGearReturnLevel + "→" + (progress.deathGearReturnLevel + 1) + " / 記憶片" + DeathGearReturnCost(progress.deathGearReturnLevel);
+        }
+        int DeathGearReturnCost(int currentLevel)
+        {
+            if (currentLevel <= 0)
+                return 20;
+            if (currentLevel == 1)
+                return 45;
+            return 80;
+        }
+        void BuyDeathGearReturnUpgrade()
+        {
+            if (progress.deathGearReturnLevel >= 3)
+            {
+                footerText.text = "帰還保証は最大です。";
+                Play(clickSfx);
+                return;
+            }
+            int cost = DeathGearReturnCost(progress.deathGearReturnLevel);
+            if (progress.memoryFragments < cost)
+            {
+                footerText.text = "記憶片が足りません。必要: " + cost;
+                Play(clickSfx);
+                return;
+            }
+            progress.memoryFragments -= cost;
+            progress.deathGearReturnLevel++;
+            SaveProgress();
+            Play(rewardSfx);
+            ShowBonusShop();
+            footerText.text = "帰還保証を強化しました。";
+        }
+        string BuildLegendaryGearShopText()
+        {
+            var lines = new List<string>();
+            foreach (var offer in LegendaryGearOffers())
+            {
+                bool bought = progress.legendaryGearPurchases.Contains(offer.gear.id);
+                lines.Add("・[" + (bought ? "交換履歴あり" : "未交換") + "] " + GearDisplayName(offer.gear) + " / 記憶片" + offer.cost + " or 欠片" + LegendaryShardCost(offer) +
+                    "\n  " + GearStatLine(offer.gear) + " / " + GearEffectText(offer.gear.effect) + "\n  " + offer.description);
+            }
+            return "通常ドロップではほぼ見ない、周回を変える一品物。\n\n伝説欠片はガチャ景品。ここで記憶片の代わりに使えます。同じ装備も再交換できます。\n\n" + string.Join("\n", lines);
+        }
+        int LegendaryShardCost(LegendaryGearOffer offer)
+        {
+            if (offer == null)
+                return 999;
+            return Mathf.Clamp(Mathf.CeilToInt(offer.cost / 20f), 10, 30);
+        }
+        List<LegendaryGearOffer> LegendaryGearOffers()
+        {
+            return new List<LegendaryGearOffer>
+            {
+                LegendaryGear("legend_shachi_blade", "伝説の双鯱裂き", "武器", "儀式具", 22, 2, 4, 3, "mythic_edge", 220, "神話存在とボスへ届く、攻撃寄りの伝説武器。"),
+                LegendaryGear("legend_mikawa_armor", "伝説の三河工程鎧", "防具", "作業具", 2, 24, -1, 2, "first_hit_guard", 210, "初撃を受け止め、長期戦の事故を減らす重防具。"),
+                LegendaryGear("legend_meieki_thread", "伝説の名駅分岐糸", "装飾品", "装飾", 4, 3, 6, 8, "escape_route", 260, "速さとLUKで選択肢の失敗を曲げ、撤退や探索を支える。"),
+                LegendaryGear("legend_airport_ward", "伝説の欠航避け護符", "装飾品", "装飾", 1, 8, 2, 6, "boss_ward", 300, "ボス戦の決定打をずらす、終盤攻略向けの護符。"),
+                LegendaryGear("legend_memory_anchor", "伝説の記憶定着印", "装飾品", "装飾", 0, 5, 1, 10, "memory_anchor", 340, "死亡時の装備保護と記憶片周回に寄せた、倉庫運用の核。"),
+                LegendaryGear("legend_impossible_edge", "伝説の現実外観測刃", "武器", "儀式具", 30, 0, 5, 5, "desperate_power", 520, "この世のものとは思えない敵へ挑むための超高額武器。")
+            };
+        }
+        LegendaryGearOffer LegendaryGear(string id, string name, string slot, string kind, int attack, int defense, int speed, int luck, string effect, int cost, string description)
+        {
+            var gear = new Gear
+            {
+                id = id,
+                name = name,
+                kind = kind,
+                slot = slot,
+                rarity = "橙",
+                attack = attack,
+                defense = defense,
+                speed = speed,
+                luck = luck,
+                score = 0,
+                effect = effect,
+                note = "記憶片ボーナスショップで交換した一品物。\n特殊効果: " + GearEffectText(effect)
+            };
+            gear.score = GearScore(gear);
+            return new LegendaryGearOffer { gear = gear, cost = cost, description = description };
+        }
+        void BuyLegendaryGear(LegendaryGearOffer offer, bool useShards)
+        {
+            if (offer == null || offer.gear == null)
+                return;
+            int shardCost = LegendaryShardCost(offer);
+            if (useShards && progress.legendaryShards < shardCost)
+            {
+                footerText.text = "伝説欠片が足りません。必要: " + shardCost;
+                Play(clickSfx);
+                return;
+            }
+            if (!useShards && progress.memoryFragments < offer.cost)
+            {
+                footerText.text = "記憶片が足りません。必要: " + offer.cost;
+                Play(clickSfx);
+                return;
+            }
+            if (useShards)
+                progress.legendaryShards -= shardCost;
+            else
+                progress.memoryFragments -= offer.cost;
+            if (!progress.legendaryGearPurchases.Contains(offer.gear.id))
+                progress.legendaryGearPurchases.Add(offer.gear.id);
+            StoreGear(offer.gear);
+            SaveProgress();
+            Play(rewardSfx);
+            ShowLegendaryGearShop();
+            footerText.text = GearShortName(offer.gear) + " を倉庫へ送りました。" + (useShards ? " 伝説欠片を消費。" : " 記憶片を消費。");
+        }
         void ShowStartingGearSelect()
         {
             mode = Mode.Scene;
-            SetBackground("characters");
+            SetBackground("character_select_trpg");
             SetPortrait(CharacterPortraitId(run.character.id));
             battleRoot.gameObject.SetActive(false);
             choiceRoot.gameObject.SetActive(true);
@@ -892,26 +1559,73 @@ namespace AichiFantasy
             ClearChoices();
             if (progress.warehouseGear.Count > 0)
             {
-                int pageSize = 2;
-                int maxPage = Mathf.Max(0, (progress.warehouseGear.Count - 1) / pageSize);
-                warehouseGearPage = Mathf.Clamp(warehouseGearPage, 0, maxPage);
-                int start = warehouseGearPage * pageSize;
-                int end = Mathf.Min(progress.warehouseGear.Count, start + pageSize);
-                for (int i = start; i < end; i++)
+                bodyText.text += "\n\n一覧はスクロールできます。装備名を選ぶと詳細確認へ進みます。";
+                for (int i = 0; i < progress.warehouseGear.Count; i++)
                 {
                     int index = i;
                     var gear = DeserializeGear(progress.warehouseGear[index]);
-                    string label = gear != null ? "取り出す\n" + GearShortName(gear) : "取り出す\n不明な装備";
-                    AddChoiceButton(label, () => TakeWarehouseGear(index), gear != null);
+                    string label = gear != null ? "確認\n" + GearShortName(gear) : "確認\n不明な装備";
+                    AddChoiceButton(label, () => ShowStartingGearConfirm(index), gear != null);
                 }
-                if (warehouseGearPage < maxPage)
-                    AddChoiceButton("次の倉庫装備", () => { warehouseGearPage++; ShowStartingGearSelect(); });
-                else if (warehouseGearPage > 0)
-                    AddChoiceButton("前の倉庫装備", () => { warehouseGearPage--; ShowStartingGearSelect(); });
             }
             AddChoiceButton("この装備で契約へ", ShowRunContract);
-            AddChoiceButton("キャラ選択へ戻る", ShowCharacterSelect);
+            AddChoiceButton("キャラ選択へ戻る", CancelStartingGearAndReturnToCharacterSelect);
       }
+        void ShowStartingGearConfirm(int index)
+        {
+            if (index < 0 || index >= progress.warehouseGear.Count)
+            {
+                ShowStartingGearSelect();
+                return;
+            }
+            var gear = DeserializeGear(progress.warehouseGear[index]);
+            if (gear == null)
+            {
+                progress.warehouseGear.RemoveAt(index);
+                SaveProgress();
+                ShowStartingGearSelect();
+                return;
+            }
+            mode = Mode.Scene;
+            SetBackground("character_select_trpg");
+            SetPortrait(CharacterPortraitId(run.character.id));
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            titleText.text = "開始装備の詳細";
+            areaText.text = gear.rarity + " / " + gear.slot;
+            var current = CurrentGearForSlot(gear.slot);
+            bodyText.text = "倉庫装備: " + GearOneLine(gear) + "\n\n" +
+                GearSummary(gear) + "\n\n" +
+                "現在の" + gear.slot + ": " + GearOneLine(current) + "\n" +
+                "差分: " + GearDeltaLine(gear, current) + "\n\n" +
+                "装備すると倉庫から取り出され、同じ部位の現在装備は倉庫へ戻ります。";
+            UpdateSideText();
+            ClearChoices();
+            AddChoiceButton("この装備を装備する", () => TakeWarehouseGear(index));
+            AddChoiceButton("一覧へ戻る", ShowStartingGearSelect);
+            AddChoiceButton("キャラ選択へ戻る", CancelStartingGearAndReturnToCharacterSelect);
+        }
+        void CancelStartingGearAndReturnToCharacterSelect()
+        {
+            ReturnEquippedGearToWarehouse();
+            run = null;
+            ShowCharacterSelect();
+        }
+        void ReturnEquippedGearToWarehouse()
+        {
+            if (run == null)
+                return;
+            if (!IsEmptyGear(run.weapon))
+                StoreGear(run.weapon);
+            if (!IsEmptyGear(run.armor))
+                StoreGear(run.armor);
+            if (!IsEmptyGear(run.accessory))
+                StoreGear(run.accessory);
+            run.weapon = EmptyGear("武器");
+            run.armor = EmptyGear("防具");
+            run.accessory = EmptyGear("装飾品");
+            SaveProgress();
+        }
         void TakeWarehouseGear(int index)
         {
             if (index < 0 || index >= progress.warehouseGear.Count)
@@ -935,14 +1649,12 @@ namespace AichiFantasy
             SaveProgress();
             LogRun("倉庫から装備: " + GearShortName(gear) + (current != null && !IsEmptyGear(current) ? " / 前装備は倉庫へ" : ""));
             footerText.text = GearShortName(gear) + " を装備しました。";
-            if (warehouseGearPage > 0 && warehouseGearPage * 2 >= progress.warehouseGear.Count)
-                warehouseGearPage--;
             ShowStartingGearSelect();
         }
         void ShowRunContract()
         {
             mode = Mode.Scene;
-            SetBackground("characters");
+            SetBackground("character_select_trpg");
             SetPortrait(CharacterPortraitId(run.character.id));
             titleText.text = "周回契約";
             areaText.text = run.character.name;
@@ -986,7 +1698,7 @@ namespace AichiFantasy
             UpdateSideText();
             ClearChoices();
             AddChoiceButton("さいころを振る", RollDice);
-            AddChoiceButton("キャラ選択へ戻る", ShowCharacterSelect);
+            AddChoiceButton("キャラ選択へ戻る", CancelStartingGearAndReturnToCharacterSelect);
         }
 
        void RollDice()
@@ -1049,17 +1761,107 @@ namespace AichiFantasy
                 run.stats.hp = run.stats.maxHp;
                 run.stats.sanity = run.stats.maxSanity;
                 run.stats.mythosKnowledge += 2;
-                result += "\n\n境界外の観測者は通常探索を飛ばし、専用ボスラッシュへ進む。";
+                result += run.flags.Contains("random_dungeon") ? "\n\n境界外の観測者は、混ざりきった階層を外側から観測する。" : "\n\n境界外の観測者は通常探索を飛ばし、専用ボスラッシュへ進む。";
             }
             Play(rewardSfx);
             bodyText.text = "出目: " + a + " / " + b + " / " + c + "  合計 " + total + "\n\n" + result;
             UpdateSideText();
             ClearChoices();
-            if (run.character.id == "final_observer")
+            if (run.flags.Contains("random_dungeon"))
+                AddChoiceButton("完全ランダムダンジョンへ", ShowRandomDungeonFloor);
+            else if (run.character.id == "final_observer")
                 AddChoiceButton("専用ボスラッシュへ", ShowFinalBossRushIntro);
             else
                 AddChoiceButton("名駅の底で目覚める", () => ShowScene("nagoya_start", false));
             diceRolling = false;
+        }
+        void ShowRandomDungeonFloor()
+        {
+            mode = Mode.Scene;
+            SetStoryPanelExpanded(false);
+            HideDiceOverlay();
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            if (run.randomDungeonFloor <= 0)
+                run.randomDungeonFloor = 1;
+            string enemyId = RandomDungeonEnemyId(run.randomDungeonFloor);
+            bool bossFloor = IsRandomDungeonBossFloor(run.randomDungeonFloor);
+            SetBackground(RandomDungeonBackground(run.randomDungeonFloor));
+            SetPortrait(bossFloor ? BossPrepPortrait(enemyId) : "stage_route_attendant");
+            titleText.text = "完全ランダムダンジョン B" + run.randomDungeonFloor + "F";
+            areaText.text = bossFloor ? "混成ボス階層" : "混成通常階層";
+            bodyText.text = RandomDungeonFloorText(enemyId, bossFloor);
+            statsText.text = "階層 " + run.randomDungeonFloor + "\n敵圧 " + RandomDungeonThreatLabel(run.randomDungeonFloor);
+            inventoryText.text = "10階層ごとにボス戦。\nボス撃破後のみ、拠点へ戻るかさらに深く進むかを選べます。";
+            UpdateSideText();
+            ClearChoices();
+            AddChoiceButton(bossFloor ? "ボスへ挑む" : "階層を進む", () => StartRandomDungeonBattle(enemyId));
+            AddChoiceButton("撤退して拠点へ戻る\n装備と報酬を持ち帰る", () => ShowEnding("return"), run.randomDungeonFloor == 1);
+            footerText.text = "すべてのSTAGEが混ざったエンドコンテンツ。深いほど敵が強く、報酬も伸びます。";
+        }
+        void StartRandomDungeonBattle(string enemyId)
+        {
+            run.sceneId = "random_dungeon";
+            run.battleReturnScene = "random_dungeon_continue";
+            run.randomDungeonBossCleared = false;
+            StartBattle(enemyId);
+        }
+        void AdvanceRandomDungeonFloor()
+        {
+            run.randomDungeonFloor++;
+            run.steps++;
+            run.instability += run.randomDungeonFloor % 5 == 0 ? 1 : 0;
+            ShowRandomDungeonFloor();
+        }
+        void ShowRandomDungeonBossClear()
+        {
+            run.randomDungeonBossCleared = false;
+            titleText.text = "混成ボス撃破";
+            areaText.text = "B" + run.randomDungeonFloor + "F 到達記録";
+            bodyText.text = "十階層ぶんの土地の気配がほどけた。\n\nここで戻れば、装備と報酬を確定できる。進めば、次の十階層はさらに強く混ざる。";
+            footerText.text = "深層ほど敵は強化され、戦利品の質も上がります。";
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            ClearChoices();
+            AddChoiceButton("拠点へ帰還\n装備と報酬を持ち帰る", () => ShowEnding("return"));
+            AddChoiceButton("さらに深く進む", AdvanceRandomDungeonFloor);
+            UpdateSideText();
+        }
+        bool IsRandomDungeonBossFloor(int floor)
+        {
+            return floor > 0 && floor % 10 == 0;
+        }
+        string RandomDungeonEnemyId(int floor)
+        {
+            if (IsRandomDungeonBossFloor(floor))
+            {
+                int bossNo = ((floor / 10 - 1) % 5) + 1;
+                return "stage_boss_" + bossNo;
+            }
+            int stageNo = ((floor + rng.Next(0, 5)) % 5) + 1;
+            int enemyNo = ((floor * 3 + rng.Next(0, 10)) % 10) + 1;
+            string id = "stage" + stageNo + "_enemy_" + enemyNo;
+            if (enemies.ContainsKey(id))
+                return id;
+            string[] fallback = { "stage_enemy_1", "stage_enemy_5", "stage_enemy_10", "stage_enemy_15", "quality_golem", "window_god", "shachi_hunter" };
+            return fallback[Mathf.Abs(floor + rng.Next(0, fallback.Length)) % fallback.Length];
+        }
+        string RandomDungeonBackground(int floor)
+        {
+            string[] images = { "station", "castle", "miso", "gamagori", "airport", "stage_meieki_unstable", "stage_airport_service" };
+            return images[Mathf.Abs(floor + run.stageSeed) % images.Length];
+        }
+        string RandomDungeonFloorText(string enemyId, bool bossFloor)
+        {
+            string name = enemies.ContainsKey(enemyId) ? enemies[enemyId].name : enemyId;
+            string text = "名駅、尾張、三河、知多、空港の境界が階層ごとに混線している。\n\n";
+            text += bossFloor ? "十階層の節目で、混ざった土地の核がボスとして立ち上がった。" : "次の通路には、どの土地の怪異かわからない足音がある。";
+            text += "\n\n出現予兆: " + name + "\n深層補正: " + RandomDungeonThreatLabel(run.randomDungeonFloor);
+            return text;
+        }
+        string RandomDungeonThreatLabel(int floor)
+        {
+            return "HP+" + Mathf.RoundToInt(floor * 7) + "% / 攻撃+" + Mathf.RoundToInt(floor * 4.5f) + "% / 防御+" + (floor / 7);
         }
         void ShowScene(string sceneId, bool allowRandom = true)
         {
@@ -1086,6 +1888,8 @@ namespace AichiFantasy
                 Play(walkSfx, 0.65f);
             activeEnemy = null;
             run.sceneId = sceneId;
+            if (!string.IsNullOrEmpty(sceneId) && sceneId.StartsWith("stage"))
+                run.freedomRegion = "";
             if (sceneId == run.pendingSceneAfterRandom)
                 run.pendingSceneAfterRandom = null;
            run.steps++;
@@ -1101,7 +1905,7 @@ namespace AichiFantasy
             areaText.text = scene.area;
             bodyText.text = scene.text + DeathShortcutWhisper(scene);
             string progressHint = BuildProgressHint(sceneId);
-            if (!string.IsNullOrEmpty(progressHint))
+            if (ShouldShowProgressHint(sceneId) && !string.IsNullOrEmpty(progressHint))
                 bodyText.text += "\n\n進行目標\n" + progressHint;
             if (!string.IsNullOrEmpty(run.pendingOutcomeText))
             {
@@ -1109,20 +1913,21 @@ namespace AichiFantasy
                 run.pendingOutcomeText = null;
             }
             if (SceneHasLuckChoice(scene))
-                bodyText.text += "\n\nLUK手応え: 6面ダイス3個 + LUK補正(LUK/2、最大+6)で判定。LUKが高いほど3個目が6になりやすい。成功で報酬、失敗でHP/SANを失う。";
+                bodyText.text += "\n\nLUK判定: 3D6 + LUK補正。成功で報酬、失敗で消耗。";
             if (run.steps >= 10)
-                bodyText.text += "\n\n周回圧: 長く留まるほど怪異の巡回が濃くなる。安全行動の反復は危険察知と不安定度を押し上げる。";
+                bodyText.text += "\n\n周回圧: 長く留まるほど怪異の巡回が濃くなる。危険察知は危険を読む力。同じ行動を繰り返すと危険察知は伸びるが、不安定度も上がることがある。";
             UpdateSideText();
             ClearChoices();
             foreach (var choice in scene.choices)
             {
-                bool enabled = choice.condition == null || choice.condition(run);
+                bool limitExhausted = IsChoiceExhausted(choice);
+                bool enabled = (choice.condition == null || choice.condition(run)) && !limitExhausted;
                 string label = BuildChoiceLabel(choice, enabled);
                 AddChoiceButton(label, () =>
                 {
                     if (!enabled)
                     {
-                        footerText.text = choice.disabledReason;
+                        footerText.text = limitExhausted ? "この周回ではもう利用できません。" : choice.disabledReason;
                         return;
                     }
                     run.lastChoiceLabel = choice.label;
@@ -1162,9 +1967,9 @@ namespace AichiFantasy
                     else if (!string.IsNullOrEmpty(choice.ending))
                         ShowEnding(choice.ending);
                     else if (choice.effect != null)
-                        ShowChoiceOutcome(choice.next, outcome);
+                        ShowChoiceOutcome(choice.next, outcome, ShouldRollRandomAfterOutcome(choice.next));
                     else
-                        ShowScene(choice.next);
+                        ShowScene(choice.next, false);
                 }, enabled);
             }
             if (sceneId == "airport_gate")
@@ -1192,6 +1997,30 @@ namespace AichiFantasy
         bool IsSideCommandLayout()
         {
             return Screen.width >= 900 && Screen.width >= Screen.height;
+        }
+        bool ApplySafeArea(bool force = false)
+        {
+            if (safeAreaRoot == null)
+                return false;
+            float width = Mathf.Max(1f, Screen.width);
+            float height = Mathf.Max(1f, Screen.height);
+            Rect area = Screen.safeArea;
+            if (area.width <= 0f || area.height <= 0f)
+                area = new Rect(0f, 0f, width, height);
+            bool changed = !safeAreaApplied ||
+                           !Mathf.Approximately(lastSafeArea.x, area.x) ||
+                           !Mathf.Approximately(lastSafeArea.y, area.y) ||
+                           !Mathf.Approximately(lastSafeArea.width, area.width) ||
+                           !Mathf.Approximately(lastSafeArea.height, area.height);
+            if (!force && !changed)
+                return false;
+            lastSafeArea = area;
+            safeAreaApplied = true;
+            safeAreaRoot.anchorMin = new Vector2(area.xMin / width, area.yMin / height);
+            safeAreaRoot.anchorMax = new Vector2(area.xMax / width, area.yMax / height);
+            safeAreaRoot.offsetMin = Vector2.zero;
+            safeAreaRoot.offsetMax = Vector2.zero;
+            return changed || force;
         }
         void ShowStatusModal()
         {
@@ -1261,7 +2090,7 @@ namespace AichiFantasy
                 "正気度 " + s.sanity + "/" + s.maxSanity +
                 "  神話理解 " + s.mythosKnowledge +
                 "  神話汚染 " + s.mythosCorruption + "\n" +
-                "空腹 " + s.hunger + "  所持金 " + s.money + "\n\n" +
+                "空腹 " + s.hunger + "  所持金 " + s.money + "  SAN " + s.sanity + "/" + s.maxSanity + "  保険札 " + progress.insuranceTickets + "\n\n" +
                 "武器: " + GearSummary(run.weapon) + "\n\n" +
                 "防具: " + GearSummary(run.armor) + "\n\n" +
                 "装飾: " + GearSummary(run.accessory) + "\n\n" +
@@ -1410,7 +2239,8 @@ namespace AichiFantasy
             storyPages.Clear();
             string text = fullStoryText ?? "";
             bool battleActive = mode == Mode.Battle && battleRoot != null && battleRoot.gameObject.activeSelf;
-            int limit = IsMobileLayout() ? 230 : IsSideCommandLayout() ? (battleActive ? 320 : 460) : 280;
+            bool endingActive = mode == Mode.Ending;
+            int limit = IsMobileLayout() ? (endingActive ? 110 : 230) : IsSideCommandLayout() ? (battleActive ? 320 : endingActive ? 110 : 460) : endingActive ? 110 : 280;
             if (storyExpanded)
                 limit += IsMobileLayout() ? 80 : 70;
             if (text.Length <= limit)
@@ -1500,13 +2330,13 @@ namespace AichiFantasy
             if (sceneId.StartsWith("stage") && sceneId.Contains("_event_"))
                 return "このSTAGEの出来事を進めると、10個目の後にSTAGEボスゲートへ入ります。失敗しても進行は続きますが、HP/SANが削れます。地方深層は別ルートです。";
             if (sceneId == "freedom_owari")
-                return "尾張方面のゴール: 尾張手がかり3以上、または鯱注視3以上で「尾張深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 尾張" + run.owari + " / 鯱注視" + run.shachiGaze + " / 空港" + run.npcAirport + " / 地元" + run.stats.localKnowledge + " / 危険" + run.dangerWarnings;
+                return "尾張方面のゴール: 尾張手がかり3以上、または鯱注視3以上で「尾張深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 尾張" + run.owari + " / 鯱注視" + run.shachiGaze + " / 空港" + run.npcAirport + " / 地元" + run.stats.localKnowledge + " / 危険察知" + run.dangerWarnings;
             if (sceneId == "freedom_mikawa")
-                return "三河方面のゴール: 三河手がかり3以上、または味噌耐性5以上で「三河深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 三河" + run.mikawa + " / 味噌耐性" + run.stats.misoResistance + " / 空港" + run.npcAirport + " / 地元" + run.stats.localKnowledge + " / 危険" + run.dangerWarnings;
+                return "三河方面のゴール: 三河手がかり3以上、または味噌耐性5以上で「三河深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 三河" + run.mikawa + " / 味噌耐性" + run.stats.misoResistance + " / 空港" + run.npcAirport + " / 地元" + run.stats.localKnowledge + " / 危険察知" + run.dangerWarnings;
             if (sceneId == "freedom_chita")
-                return "知多・海方面のゴール: 空港知識+神話理解が6以上で「海底深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 空港" + run.npcAirport + " / 神話理解" + run.stats.mythosKnowledge + " / 地元" + run.stats.localKnowledge + " / 危険" + run.dangerWarnings;
+                return "知多・海方面のゴール: 空港知識+神話理解が6以上で「海底深層へ」が開きます。空港へ進むには 空港知識2 / 地元知識4 / 危険察知2 のどれかを満たします。\n現在: 空港" + run.npcAirport + " / 神話理解" + run.stats.mythosKnowledge + " / 地元" + run.stats.localKnowledge + " / 危険察知" + run.dangerWarnings;
             if (sceneId == "nagoya_after_battle" || sceneId == "freedom_base" || sceneId == "meieki_goal")
-                return "大目標: 空港境界へ向かい帰還する。条件は 空港知識2以上、地元知識4以上、危険察知2以上のいずれか。\n現在: 空港" + run.npcAirport + "/2 / 地元" + run.stats.localKnowledge + "/4 / 危険" + run.dangerWarnings + "/2";
+                return "大目標: 空港境界へ向かい帰還する。条件は 空港知識2以上、地元知識4以上、危険察知2以上のいずれか。\n現在: 空港" + run.npcAirport + "/2 / 地元" + run.stats.localKnowledge + "/4 / 危険察知" + run.dangerWarnings + "/2";
             if (sceneId == "airport_bridge")
                 return "空港周辺まで到達済みです。検査・手荷物・滑走路下を越えると空港ゲートへ進みます。";
             if (sceneId == "airport_gate")
@@ -1514,6 +2344,14 @@ namespace AichiFantasy
             if (sceneId.EndsWith("_deep_route"))
                 return "地方深層です。ここは専用ENDや空港帰還準備のための別ルートです。STAGE本線のボスは各STAGE内のボスゲートにいます。";
             return "";
+        }
+        bool ShouldShowProgressHint(string sceneId)
+        {
+            if (string.IsNullOrEmpty(sceneId))
+                return false;
+            if (sceneId.StartsWith("stage"))
+                return false;
+            return sceneId == "nagoya_start" || sceneId == "meieki_stage_routes" || sceneId == "airport_manifest_hall";
         }
         IEnumerator ResolveChoiceWithDiceAnimation(Choice choice)
         {
@@ -1557,9 +2395,9 @@ namespace AichiFantasy
             else if (!string.IsNullOrEmpty(choice.ending))
                 ShowEnding(choice.ending);
             else
-                ShowChoiceOutcome(choice.next, outcome);
+                ShowChoiceOutcome(choice.next, outcome, ShouldRollRandomAfterOutcome(choice.next));
         }
-        void ShowChoiceOutcome(string nextSceneId, string outcome)
+        void ShowChoiceOutcome(string nextSceneId, string outcome, bool allowRandomNext = false)
         {
             mode = Mode.Scene;
             battleRoot.gameObject.SetActive(false);
@@ -1567,13 +2405,40 @@ namespace AichiFantasy
             titleText.text = "足跡";
             areaText.text = "残ったもの";
             bool hasStructuredFlavor = !string.IsNullOrEmpty(outcome) && (outcome.Contains("直前の気配") || outcome.Contains("手を伸ばした先")) && outcome.Contains("残響");
-            bool compactOutcome = !string.IsNullOrEmpty(outcome) && (outcome.StartsWith("踏み跡:") || outcome.StartsWith("兆し:"));
-            bodyText.text = compactOutcome ? outcome : hasStructuredFlavor ? outcome + OutcomeAfterword(nextSceneId, outcome) : "足跡\n\n" + OutcomeFlavor(outcome) + "\n\n" + outcome + OutcomeAfterword(nextSceneId, outcome);
+            bool compactOutcome = IsCompactOutcomeText(outcome);
+            bodyText.text = TrimEventBlankLines(compactOutcome ? outcome : hasStructuredFlavor ? outcome + OutcomeAfterword(nextSceneId, outcome) : "足跡\n" + OutcomeFlavor(outcome) + "\n" + outcome + OutcomeAfterword(nextSceneId, outcome));
             footerText.text = "余韻が薄れるのを待つ。";
             UpdateSideText();
             ClearChoices();
-            AddChoiceButton("次に進む", () => ShowScene(nextSceneId, false));
+            AddChoiceButton("次に進む", () => ShowScene(nextSceneId, allowRandomNext));
        }
+        bool ShouldRollRandomAfterOutcome(string nextSceneId)
+        {
+            return run != null &&
+                string.IsNullOrEmpty(run.pendingSceneAfterRandom) &&
+                IsForwardRuntimeStageProgress(run.sceneId, nextSceneId);
+        }
+        bool IsForwardRuntimeStageProgress(string currentSceneId, string nextSceneId)
+        {
+            int currentStage;
+            int currentIndex;
+            int nextStage;
+            int nextIndex;
+            if (!TryParseStageEventId(nextSceneId, out nextStage, out nextIndex))
+                return false;
+            if (!TryParseStageEventId(currentSceneId, out currentStage, out currentIndex))
+                return nextIndex == 0;
+            return currentStage == nextStage && nextIndex == currentIndex + 1;
+        }
+        bool IsCompactOutcomeText(string outcome)
+        {
+            if (string.IsNullOrWhiteSpace(outcome))
+                return false;
+            return outcome.StartsWith("選択:") ||
+                outcome.StartsWith("判定:") ||
+                outcome.StartsWith("踏み跡:") ||
+                outcome.StartsWith("兆し:");
+        }
         string OutcomeFlavor(string outcome)
         {
             if (string.IsNullOrEmpty(outcome))
@@ -1597,14 +2462,13 @@ namespace AichiFantasy
         string BuildChoiceOutcomeText(Choice choice, string label, string delta)
         {
             bool luckOutcome = !string.IsNullOrEmpty(run.lastRollSummary) || (!string.IsNullOrEmpty(label) && label.Contains("LUK判定"));
-            string detail = ChoiceResultDetail(choice, delta);
             string roll = luckOutcome
-                ? CompactLine(!string.IsNullOrEmpty(run.lastRollSummary) ? OneLineRollSummary(run.lastRollSummary) : "LUK判定を実行")
+                ? CompactLine(!string.IsNullOrEmpty(run.lastRollSummary) ? OneLineRollSummary(run.lastRollSummary) : "LUK判定", 42)
                 : "なし";
-            return "踏み跡: " + CompactLine(CleanChoiceLabel(label), 42) + "\n" +
-                "手応え: " + CompactLine(roll, 56) + "\n" +
-                "残響: " + CompactLine(detail, 64) + "\n" +
-                "爪痕: " + CompactStatDelta(delta);
+            return "選択: " + CompactLine(CleanChoiceLabel(label), 34) + "\n" +
+                "判定: " + roll + "\n" +
+                "結果: " + ShortChoiceResult(choice, delta) + "\n" +
+                "変化: " + CompactStatDelta(delta);
         }
         string BuildChoiceDiceText(string label, int a, int b, int c, int luckBonus)
         {
@@ -1643,18 +2507,43 @@ namespace AichiFantasy
         {
             if (string.IsNullOrWhiteSpace(delta) || delta.Contains("大きな変化なし") || delta.Contains("変化なし"))
                 return "大きな変化なし";
-            return CompactLine(delta, 70);
+            return CompactLine(delta, 52);
+        }
+        string ShortChoiceResult(Choice choice, string delta)
+        {
+            string label = choice != null ? choice.label : "";
+            if (!string.IsNullOrEmpty(run.lastRollSummary))
+                return run.lastRollSummary.Contains("成功") ? "隙間を抜けた。" : "代償を置いた。";
+            if (!string.IsNullOrWhiteSpace(delta) && !delta.Contains("変化なし"))
+            {
+                if (delta.Contains("HP-") || delta.Contains("SAN-"))
+                    return "痛みだけが残った。";
+                if (delta.Contains("HP+") || delta.Contains("SAN+"))
+                    return "息が少し戻った。";
+                if (delta.Contains("LUK+") || delta.Contains("危険察知+"))
+                    return "次の道が一瞬だけ見えた。";
+                if (delta.Contains("神話") || delta.Contains("知識"))
+                    return "見てはいけない規則を読んだ。";
+                if (delta.Contains("所持金-"))
+                    return "硬貨の音が遠ざかった。";
+                if (delta.Contains("所持金+"))
+                    return "現実側の対価が残った。";
+            }
+            if (choice != null && !string.IsNullOrEmpty(choice.battle))
+                return "向こうもこちらを見た。";
+            if (choice != null && !string.IsNullOrEmpty(choice.ending))
+                return "戻れない線を越えた。";
+            if (ChoiceLabelContains(label, "戻る", "出発", "進む"))
+                return "足音だけが先へ行く。";
+            return "景色の色が変わった。";
         }
         string ChoiceBeforeDetail(Choice choice, string label)
         {
             if (choice != null && !string.IsNullOrEmpty(choice.label))
                 label = choice.label.Replace("\n", " / ");
             string action = CleanChoiceLabel(label);
-            string destination = ChoiceDestinationName(choice);
-            return "手を伸ばした先: " + action +
-                "\n向かった先: " + destination +
-                "\n胸の内: " + ChoiceIntentDetail(choice, action, destination) +
-                "\n直前の気配: " + ChoiceOmenDetail(choice, action);
+            return "選択: " + CompactLine(action, 42) +
+                "\n気配: " + CompactLine(ChoiceOmenDetail(choice, action), 54);
         }
         string CleanChoiceLabel(string label)
         {
@@ -1949,9 +2838,6 @@ namespace AichiFantasy
         }
         string OutcomeAfterword(string nextSceneId, string outcome)
         {
-            string next = "";
-            if (!string.IsNullOrEmpty(nextSceneId) && scenes.TryGetValue(nextSceneId, out var scene))
-                next = scene.title;
             string region = !string.IsNullOrEmpty(run.freedomRegion) ? run.freedomRegion : "";
             string line = "";
             if (region == "owari" || outcome.Contains("尾張") || outcome.Contains("鯱"))
@@ -1962,9 +2848,16 @@ namespace AichiFantasy
                 line = "潮の音は遠ざからない。空港へ近づくほど、海底の選択肢も増える。";
             else
                 line = "名駅の底は、あなたの判断を静かに記録している。";
-            if (!string.IsNullOrEmpty(next))
-                line += "\n次の行き先: " + next;
-            return "\n\n余韻\n" + line;
+            return "\n余韻\n" + line;
+        }
+        string TrimEventBlankLines(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return "";
+            text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+            while (text.Contains("\n\n"))
+                text = text.Replace("\n\n", "\n");
+            return text.Trim();
         }
         string RunStateResonance()
         {
@@ -1989,13 +2882,15 @@ namespace AichiFantasy
         }
         bool TryShowRandomEvent(string targetSceneId)
         {
+            if (!IsRuntimeStageEventScene(targetSceneId))
+                return false;
             if (run == null || run.steps <= 0 || run.randomCooldown > 0)
                 return false;
             if (!string.IsNullOrEmpty(run.pendingSceneAfterRandom))
                 return false;
             if (targetSceneId == "airport_gate" || targetSceneId == "nagoya_start")
                 return false;
-            float chance = 0.48f + run.instability * 0.055f + Mathf.Clamp01(run.stats.mythosCorruption * 0.045f) + Mathf.Clamp01(run.shachiGaze * 0.025f) + Mathf.Clamp01(progress.endings.Count * 0.02f);
+            float chance = 0.62f + run.instability * 0.055f + Mathf.Clamp01(run.stats.mythosCorruption * 0.045f) + Mathf.Clamp01(run.shachiGaze * 0.025f) + Mathf.Clamp01(progress.endings.Count * 0.02f);
             if (rng.NextDouble() > chance)
             {
                 if (run.steps >= 3 && rng.NextDouble() < 0.22f + Mathf.Clamp01(run.shachiGaze * 0.025f))
@@ -2005,7 +2900,7 @@ namespace AichiFantasy
                     {
                         run.pendingSceneAfterRandom = targetSceneId;
                         run.battleReturnScene = targetSceneId;
-                        run.randomCooldown = 2;
+                        run.randomCooldown = 1;
                         Play(eventSfx, 0.72f);
                         LogRun("敵の気配: " + EnemyName(ambush));
                         ShowRiskAmbushEvent(targetSceneId, ambush);
@@ -2015,10 +2910,167 @@ namespace AichiFantasy
                 return false;
             }
             run.pendingSceneAfterRandom = targetSceneId;
-            run.randomCooldown = 2;
-            LogRun("名のない気配発生");
-            ShowRandomEvent(targetSceneId);
+            run.randomCooldown = 1;
+            if (rng.NextDouble() < BonusRandomEventChance(targetSceneId))
+            {
+                LogRun("小さな寄り道発生");
+                ShowBonusRandomEvent(targetSceneId);
+            }
+            else
+            {
+                LogRun("名のない気配発生");
+                ShowRandomEvent(targetSceneId);
+            }
             return true;
+        }
+        float BonusRandomEventChance(string targetSceneId)
+        {
+            float chance = 0.24f;
+            if (run != null)
+            {
+                if (run.stats.hp <= Mathf.CeilToInt(run.stats.maxHp * 0.45f))
+                    chance += 0.08f;
+                if (run.stats.sanity <= Mathf.CeilToInt(run.stats.maxSanity * 0.45f))
+                    chance += 0.08f;
+                if (run.stats.money >= 250)
+                    chance += 0.04f;
+            }
+            if (!string.IsNullOrEmpty(targetSceneId) && targetSceneId.StartsWith("stage"))
+                chance += 0.06f;
+            return Mathf.Clamp(chance, 0.18f, 0.42f);
+        }
+        void ShowBonusRandomEvent(string targetSceneId)
+        {
+            mode = Mode.Scene;
+            Play(rewardSfx != null ? rewardSfx : eventSfx, 0.72f);
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            ClearChoices();
+            var e = SelectBonusRandomEvent(targetSceneId);
+            if (e == null)
+            {
+                ShowRandomEvent(targetSceneId);
+                return;
+            }
+            if (run != null && run.seenRandomEvents != null)
+                run.seenRandomEvents.Add(e.id);
+            SetBackground(e.image);
+            SetPortrait(e.portrait);
+            SetStoryPanelExpanded(false);
+            titleText.text = e.title;
+            areaText.text = e.area;
+            bodyText.text = e.text;
+            footerText.text = "小さな寄り道です。選んだ効果だけ受け取って先へ進みます。";
+            foreach (var choice in e.choices)
+            {
+                bool enabled = choice.condition == null || choice.condition(run);
+                string label = enabled ? choice.label : choice.label + "\n" + choice.disabledReason;
+                AddChoiceButton(label, () => ResolveBonusRandomEventChoice(e, choice), enabled);
+            }
+            AddChoiceButton("何も受け取らず進む", () =>
+            {
+                ShowChoiceOutcome(run.pendingSceneAfterRandom, "選択: 寄り道を離れる\n結果: 灯りは背後で静かに消えた。");
+            });
+            UpdateSideText();
+        }
+        void ResolveBonusRandomEventChoice(BonusEventDef e, BonusEventChoice choice)
+        {
+            var before = run.stats.Clone();
+            var progressBefore = CaptureProgress();
+            choice.effect?.Invoke(run);
+            string delta = BuildStatDelta(before, run.stats, progressBefore);
+            string body = "選択: " + choice.label.Replace("\n", " / ") + "\n結果: " + choice.resultText;
+            if (!string.IsNullOrEmpty(delta))
+                body += "\n変化: " + delta;
+            LogRun(e.title + ": " + delta);
+            ShowChoiceOutcome(run.pendingSceneAfterRandom, body);
+        }
+        BonusEventDef SelectBonusRandomEvent(string targetSceneId)
+        {
+            var events = BonusRandomEvents();
+            if (run != null && !string.IsNullOrEmpty(run.freedomRegion))
+            {
+                var regionalEvents = new List<BonusEventDef>();
+                foreach (var candidate in events)
+                {
+                    if (IsBonusRegionEvent(candidate, run.freedomRegion))
+                        regionalEvents.Add(candidate);
+                }
+                if (regionalEvents.Count > 0)
+                    events = regionalEvents;
+            }
+            var unseen = new List<BonusEventDef>();
+            if (run != null)
+            {
+                if (run.seenRandomEvents == null)
+                    run.seenRandomEvents = new HashSet<string>();
+                foreach (var candidate in events)
+                {
+                    if (!run.seenRandomEvents.Contains(candidate.id))
+                        unseen.Add(candidate);
+                }
+            }
+            if (unseen.Count > 0)
+                events = unseen;
+            if (events.Count == 0)
+                return null;
+            return events[rng.Next(events.Count)];
+        }
+        bool IsBonusRegionEvent(BonusEventDef e, string region)
+        {
+            if (e == null || string.IsNullOrEmpty(region))
+                return true;
+            string key = (e.image ?? "") + " " + (e.area ?? "") + " " + (e.id ?? "");
+            if (region == "owari")
+                return key.Contains("station") || key.Contains("kishimen") || key.Contains("osu") || key.Contains("atsuta") || key.Contains("owari") || key.Contains("名古屋") || key.Contains("尾張") || key.Contains("熱田") || key.Contains("大須");
+            if (region == "mikawa")
+                return key.Contains("miso") || key.Contains("toyota") || key.Contains("mikawa") || key.Contains("岡崎") || key.Contains("豊田") || key.Contains("三河");
+            if (region == "chita")
+                return key.Contains("airport") || key.Contains("tokoname") || key.Contains("chita") || key.Contains("sea") || key.Contains("空港") || key.Contains("常滑") || key.Contains("知多");
+            return true;
+        }
+        List<BonusEventDef> BonusRandomEvents()
+        {
+            var list = new List<BonusEventDef>();
+            AddBonusEvent(list, "bonus_kishimen_stand", "終電前のきしめん屋台", "名駅 / 補給", "kishimen", "event_kishimen_owner",
+                "ホーム端の屋台で、顔の見えない店主が湯切りをしている。湯気は行き先表示の形にほどけ、どんぶりの底で小さな駅名が光った。",
+                new BonusEventChoice { label = "出汁まで飲む\nHP+5/空腹-2", resultText = "出汁は熱い。胃の底から、まだ歩けるという感覚が戻った。", effect = r => { r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 5); r.stats.hunger = Math.Max(0, r.stats.hunger - 2); } },
+                new BonusEventChoice { label = "店主の一言を聞く\n地元+1/空港+1", resultText = "店主は券売機の裏にある近道を一言だけ教えた。", effect = r => { r.stats.localKnowledge += 1; r.npcAirport += 1; } });
+            AddBonusEvent(list, "bonus_ogura_morning", "閉店後の小倉モーニング", "大須 / 喫茶", "osu", "event_cafe_server",
+                "シャッターの下だけ灯りが漏れている。席には厚いトーストと、まだ溶けていないバターが置かれていた。",
+                new BonusEventChoice { label = "小倉トーストを食べる\n所持金-180/HP+6", resultText = "甘さが現実の輪郭を少し戻した。", condition = r => r.stats.money >= 180, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= 180; r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 6); r.ogura += 1; } },
+                new BonusEventChoice { label = "水だけもらう\nSAN+2", resultText = "水は妙に冷たいが、頭の奥のざわめきが少し静まった。", effect = r => { r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 2); } });
+            AddBonusEvent(list, "bonus_manaca_charge", "熱田の無人チャージ機", "熱田 / 小祓い", "atsuta", "event_atsuta_miko",
+                "境内の隅に、交通系ICのチャージ機だけが立っている。画面には残高ではなく、今日の無事が表示されていた。",
+                new BonusEventChoice { label = "100円だけ入れる\n所持金-100/LUK+1/SAN+1", resultText = "チャージ音が鈴の音に変わり、足取りが軽くなった。", condition = r => r.stats.money >= 100, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= 100; r.stats.luck += 1; r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 1); } },
+                new BonusEventChoice { label = "残高表示を読む\n地元+1/危険察知+1", resultText = "残高欄には、この先で避けるべき出口番号が出ていた。", effect = r => { r.stats.localKnowledge += 1; r.dangerWarnings += 1; } });
+            AddBonusEvent(list, "bonus_miso_stand", "岡崎の味噌汁スタンド", "岡崎 / 補給", "miso", "event_miso_voice",
+                "味噌蔵の軒先に紙コップが並んでいる。湯気の中から三度目の声だけが、今日は優しい。",
+                new BonusEventChoice { label = "濃い一杯を飲む\nHP+4/味噌耐性+1", resultText = "濃さが体の芯に残り、発酵したものへの耐性になった。", effect = r => { r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 4); r.stats.misoResistance += 1; } },
+                new BonusEventChoice { label = "薄めてもらう\nSAN+2", resultText = "薄い味噌汁は、戻れる日常の味がした。", effect = r => { r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 2); } });
+            AddBonusEvent(list, "bonus_osu_capsule", "大須の半透明カプセル", "大須 / 小報酬", "osu", "event_occult_researcher",
+                "路地のガチャ機に、半透明のカプセルが一つだけ残っている。中身は開けるまで能力値の形をしていない。",
+                new BonusEventChoice { label = "回してみる\n所持金-200/能力+1", resultText = "カプセルの中身は、今いちばん足りない形で手に馴染んだ。", condition = r => r.stats.money >= 200, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= 200; int pick = rng.Next(0, 4); if (pick == 0) r.stats.attack += 1; else if (pick == 1) r.stats.defense += 1; else if (pick == 2) r.stats.speed += 1; else r.stats.luck += 1; } },
+                new BonusEventChoice { label = "空カプセルを拾う\nLUK+1", resultText = "空なのに少し重い。次の出目だけ、こちらを向く気がした。", effect = r => { r.stats.luck += 1; } });
+            AddBonusEvent(list, "bonus_airport_water", "空港の静かな給水所", "空港 / 補給", "airport", "event_gate_inspector",
+                "人のいない給水所で、水だけが規則正しく落ちている。紙コップには搭乗口ではなく、呼吸の回数が印字されていた。",
+                new BonusEventChoice { label = "水を飲む\nHP+3/SAN+2", resultText = "水はぬるい。それでも、喉を通る間だけ空港の音が遠ざかった。", effect = r => { r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 3); r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 2); } },
+                new BonusEventChoice { label = "紙コップを持つ\n空港+1/危険察知+1", resultText = "紙コップの底に、まだ開いていない検査口の番号があった。", effect = r => { r.npcAirport += 1; r.dangerWarnings += 1; } });
+            return list;
+        }
+        void AddBonusEvent(List<BonusEventDef> list, string id, string title, string area, string image, string portrait, string text, params BonusEventChoice[] choices)
+        {
+            var e = new BonusEventDef
+            {
+                id = id,
+                title = title,
+                area = area,
+                image = image,
+                portrait = portrait,
+                text = text
+            };
+            e.choices.AddRange(choices);
+            list.Add(e);
         }
         void ApplyLoopPressure()
         {
@@ -2155,7 +3207,7 @@ namespace AichiFantasy
             {
                 int used = ChoiceUseCount(choice);
                 if (used >= limit)
-                    label = choice.label + "\n再使用: 危険上昇";
+                    label = choice.label + "\n使用上限";
                 else if (used > 0)
                     label += "\n残り " + (limit - used) + " 回";
             }
@@ -2203,17 +3255,19 @@ namespace AichiFantasy
             string key = ChoiceUseKey(choice);
             int before = run.choiceUses.TryGetValue(key, out int count) ? count : 0;
             run.choiceUses[key] = before + 1;
-            if (before > 0)
+            if (before > 0 && !IsCountLimitedChoice(choice))
             {
                 run.dangerWarnings += 1;
                 if (before % 2 == 1)
                     run.instability += 1;
-                LogRun("同じ行動の反復で危険上昇");
+                LogRun(before % 2 == 1 ? "反復で危険察知+1/不安定度+1" : "反復で危険察知+1");
             }
         }
         int ChoiceUseLimit(Choice choice)
         {
             if (choice == null || choice.effect == null)
+                return 0;
+            if (IsRuntimeStageEventScene(run != null ? run.sceneId : ""))
                 return 0;
             string label = choice.label ?? "";
             if (label.Contains("戻る") || label.Contains("方面へ") || label.Contains("ゴールを確認") || label.Contains("STAGE") || label.Contains("ENDへ"))
@@ -2229,6 +3283,35 @@ namespace AichiFantasy
             if (label.Contains("名のない気配") || label.Contains("出来事を探す"))
                 return 0;
             return 1;
+        }
+        bool IsCountLimitedChoice(Choice choice)
+        {
+            if (choice == null)
+                return false;
+            string label = choice.label ?? "";
+            string sceneId = run != null ? run.sceneId : "";
+            return IsStageShopScene(sceneId) ||
+                label.Contains("買う") ||
+                label.Contains("救急") ||
+                label.Contains("工具") ||
+                label.Contains("防護札") ||
+                label.Contains("方位具") ||
+                label.Contains("遮断札") ||
+                label.Contains("保険") ||
+                label.Contains("仮眠") ||
+                label.Contains("休む");
+        }
+        bool IsStageShopScene(string sceneId)
+        {
+            return !string.IsNullOrEmpty(sceneId) &&
+                sceneId.StartsWith("stage") &&
+                (sceneId.EndsWith("_shop") || sceneId.EndsWith("_boss_shop"));
+        }
+        bool IsRuntimeStageEventScene(string sceneId)
+        {
+            int stageNo;
+            int index;
+            return TryParseStageEventId(sceneId, out stageNo, out index);
         }
        bool SceneHasLuckChoice(SceneDef scene)
         {
@@ -2517,7 +3600,7 @@ namespace AichiFantasy
             areaText.text = e.area;
             int preview = PreviewEventRoll(e);
             string checkName = EventCheckName(e);
-            bodyText.text = BuildRandomEventIntroText(e) + "\n\n判定目標: " + e.difficulty + " / 予兆: " + DiceForecast(preview, e.difficulty) +
+            bodyText.text = BuildRandomEventIntroText(e) + "\n判定目標: " + e.difficulty + " / 予兆: " + DiceForecast(preview, e.difficulty) +
                 "\n" + checkName + ": 6面ダイス3個 + " + EventCheckBonusLabel(e);
             ClearChoices();
             AddChoiceButton(e.successLabel + "\n" + checkName, () =>
@@ -2535,10 +3618,11 @@ namespace AichiFantasy
                     var before = run.stats.Clone();
                     var progressBefore = CaptureProgress();
                     e.success?.Invoke(run);
+                    string chainText = ApplyEventChainProgress(e, true);
                     string delta = BuildStatDelta(before, run.stats, progressBefore);
                     LogRun(e.title + ": 成功 " + delta);
                     SetStoryPanelExpanded(true);
-                    bodyText.text = BuildRandomEventResultText(e, true, delta);
+                    bodyText.text = BuildRandomEventResultText(e, true, delta, 0, chainText);
                     footerText.text = "結果、能力変化、後味は本文に表示しています。";
                     Play(rewardSfx, 0.65f);
                    UpdateSideText();
@@ -2609,30 +3693,38 @@ namespace AichiFantasy
         {
             if (e == null)
                 return "";
-            string key = ((e.id ?? "") + " " + (e.area ?? "") + " " + (e.image ?? "") + " " + (e.title ?? "")).ToLowerInvariant();
-            string[] pool;
-            if (key.Contains("airport") || key.Contains("chita") || key.Contains("gamagori") || key.Contains("tokoname") || key.Contains("handa") || key.Contains("laguna") || key.Contains("sea") || key.Contains("空港") || key.Contains("知多") || key.Contains("蒲郡") || key.Contains("常滑") || key.Contains("半田") || key.Contains("海"))
-                pool = new[] { "event_gate_inspector", "event_under_runway_clerk", "event_fog_ferry_pilot", "event_gamagori_diver", "event_handa_brewer", "event_laguna_actor", "event_tea_medium" };
-            else if (key.Contains("miso") || key.Contains("mikawa") || key.Contains("okazaki") || key.Contains("toyota") || key.Contains("kariya") || key.Contains("chiryu") || key.Contains("toyokawa") || key.Contains("岡崎") || key.Contains("豊田") || key.Contains("刈谷") || key.Contains("知立") || key.Contains("三河"))
-                pool = new[] { "event_miso_voice", "event_factory_inspector", "event_koji_bride", "event_chiryu_puppeteer", "event_black_torii_miko", "event_osu_signal_hacker", "event_handa_brewer" };
-            else if (key.Contains("owari") || key.Contains("castle") || key.Contains("atsuta") || key.Contains("osu") || key.Contains("sakae") || key.Contains("seto") || key.Contains("inuyama") || key.Contains("arimatsu") || key.Contains("ichinomiya") || key.Contains("nagakute") || key.Contains("尾張") || key.Contains("熱田") || key.Contains("大須") || key.Contains("栄") || key.Contains("瀬戸") || key.Contains("犬山") || key.Contains("有松") || key.Contains("一宮") || key.Contains("長久手"))
-                pool = new[] { "event_shachi_avatar", "event_atsuta_miko", "event_black_torii_miko", "event_sakae_broker", "event_arimatsu_weaver", "event_inuyama_mask", "event_seto_potter", "event_battlefield_monk", "event_osu_signal_hacker" };
-            else
-                pool = new[] { "event_subway_child", "event_locker_keeper", "event_memory_locker_keeper", "event_memory_vendor", "event_route_cartographer", "event_kishimen_owner", "event_occult_researcher", "event_cafe_server" };
-            return pool[StableEventPortraitIndex(e.id, pool.Length)];
+            string uniquePortrait = UniqueRandomEventPortraitId(e.id);
+            if (HasPortraitTexture(uniquePortrait))
+                return uniquePortrait;
+            if (!string.IsNullOrEmpty(e.portrait))
+                return e.portrait;
+            return "event_occult_researcher";
         }
-        int StableEventPortraitIndex(string id, int count)
+        string UniqueRandomEventPortraitId(string eventId)
         {
-            if (count <= 1)
-                return 0;
-            unchecked
+            if (string.IsNullOrEmpty(eventId))
+                return "";
+            return "event_unique_" + SanitizeResourceId(eventId);
+        }
+        string SanitizeResourceId(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+            var chars = value.ToLowerInvariant().ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
             {
-                int hash = 23;
-                string value = string.IsNullOrEmpty(id) ? "event" : id;
-                for (int i = 0; i < value.Length; i++)
-                    hash = hash * 31 + value[i];
-                return (hash & 0x7fffffff) % count;
+                bool ok = (chars[i] >= 'a' && chars[i] <= 'z') || (chars[i] >= '0' && chars[i] <= '9') || chars[i] == '_';
+                if (!ok)
+                    chars[i] = '_';
             }
+            return new string(chars);
+        }
+        bool HasPortraitTexture(string id)
+        {
+            if (string.IsNullOrEmpty(id))
+                return false;
+            return Resources.Load<Texture2D>("AichiFantasy/Portraits/NPC/" + id) != null ||
+                   Resources.Load<Texture2D>("AichiFantasy/Portraits/" + id) != null;
         }
         string DeathShortcutWhisper(SceneDef scene)
         {
@@ -2678,11 +3770,12 @@ namespace AichiFantasy
             HideDiceOverlay();
             int roll = a + b + c + checkBonus;
             bool success = roll >= e.difficulty;
-            run.lastRollSummary = EventRollDetail(e, a, b, c, checkBonus, roll, e.difficulty);
+            int outcomeTier = EventOutcomeTier(a, b, c, roll, e.difficulty);
+            run.lastRollSummary = EventRollDetail(e, a, b, c, checkBonus, roll, e.difficulty, outcomeTier);
             ShowDiceOverlayResult(EventCheckName(e), a, b, c, checkBonus, e.difficulty, success);
-            titleText.text = EventCheckName(e) + (success ? " 成功" : " 失敗");
-            areaText.text = success ? "成功" : "失敗";
-            footerText.text = DiceProgressText(a, b, c, checkBonus, e.difficulty) + " / " + (success ? "成功" : "失敗");
+            titleText.text = EventCheckName(e) + " " + EventOutcomeLabel(success, outcomeTier);
+            areaText.text = EventOutcomeLabel(success, outcomeTier);
+            footerText.text = DiceProgressText(a, b, c, checkBonus, e.difficulty) + " / " + EventOutcomeLabel(success, outcomeTier);
             yield return new WaitForSeconds(1.0f);
             HideDiceOverlay();
             if (success)
@@ -2691,10 +3784,12 @@ namespace AichiFantasy
                 var progressBefore = CaptureProgress();
                 e.success?.Invoke(run);
                 ApplyRandomEventAftermath(e, true);
+                ApplyRandomEventCriticalOutcome(e, true, outcomeTier);
+                string chainText = ApplyEventChainProgress(e, true);
                 string delta = BuildStatDelta(before, run.stats, progressBefore);
-               LogRun(e.title + ": 成功 " + delta);
+               LogRun(e.title + ": " + EventOutcomeLabel(true, outcomeTier) + " " + delta);
                 SetStoryPanelExpanded(true);
-                bodyText.text = BuildRandomEventResultText(e, true, delta);
+                bodyText.text = BuildRandomEventResultText(e, true, delta, outcomeTier, chainText);
                 footerText.text = "結果、能力変化、後味は本文に表示しています。";
                 Play(rewardSfx, 0.65f);
                 UpdateSideText();
@@ -2707,10 +3802,11 @@ namespace AichiFantasy
                 var progressBefore = CaptureProgress();
                 e.fail?.Invoke(run);
                 ApplyRandomEventAftermath(e, false);
+                ApplyRandomEventCriticalOutcome(e, false, outcomeTier);
                 string delta = BuildStatDelta(before, run.stats, progressBefore);
-                LogRun(e.title + ": 失敗 " + delta);
+                LogRun(e.title + ": " + EventOutcomeLabel(false, outcomeTier) + " " + delta);
                 SetStoryPanelExpanded(true);
-                bodyText.text = BuildRandomEventResultText(e, false, delta);
+                bodyText.text = BuildRandomEventResultText(e, false, delta, outcomeTier);
                 footerText.text = "結果、能力変化、後味は本文に表示しています。";
                 Play(doomSfx, 0.45f);
                 UpdateSideText();
@@ -2734,7 +3830,7 @@ namespace AichiFantasy
                 }
             }
         }
-        string BuildRandomEventResultText(RandomEventDef e, bool success, string delta)
+        string BuildRandomEventResultText(RandomEventDef e, bool success, string delta, int outcomeTier = 0, string chainText = "")
         {
             string roll = !string.IsNullOrEmpty(run.lastRollSummary)
                 ? OneLineRollSummary(run.lastRollSummary)
@@ -2742,10 +3838,103 @@ namespace AichiFantasy
             string outcome = success ? e.successText : e.failText;
             if (string.IsNullOrWhiteSpace(outcome))
                 outcome = RandomEventSpecificOutcome(e, success, delta);
-            return "兆し: " + CompactLine(RandomEventBeforeText(e), 58) + "\n" +
-                "手応え: " + CompactLine(roll, 58) + "\n" +
-                "残響: " + CompactLine(outcome, 66) + "\n" +
-                "爪痕: " + CompactStatDelta(delta);
+            string extra = EventCriticalOutcomeText(e, success, outcomeTier);
+            return "判定: " + CompactLine(roll, 46) + "\n" +
+                "結果: " + CompactLine(outcome, 44) + (string.IsNullOrEmpty(extra) ? "" : "\n" + extra) + (string.IsNullOrEmpty(chainText) ? "" : "\n連鎖: " + CompactLine(chainText, 52)) + "\n" +
+                "変化: " + CompactStatDelta(delta);
+        }
+        string ApplyEventChainProgress(RandomEventDef e, bool success)
+        {
+            if (run == null || e == null || !success)
+                return "";
+            var notes = new List<string>();
+            AddEventChainSeed(e.id, "meieki_coinlocker", "chain_locker_key", "ロッカーの未使用鍵");
+            AddEventChainSeed(e.id, "atsuta_oath", "chain_atsuta_oath", "封じ縄の結び目");
+            AddEventChainSeed(e.id, "osu_radio", "chain_boss_broadcast", "未来実況の周波数");
+            AddEventChainSeed(e.id, "gamagori_tide", "chain_sea_chart", "海底星図の欠片");
+            AddEventChainSeed(e.id, "arimatsu_thread", "chain_route_thread", "分岐糸");
+            AddEventChainSeed(e.id, "okazaki_stamp", "chain_mikawa_seal", "逆さ印章");
+            AddTriggeredEventChain(notes, e.id == "ai_meieki_memory_lockers_04", "chain_locker_key", "chain_locker_exit", "未使用鍵が非常口の番号と噛み合った", 2, r => { r.stats.localKnowledge += 1; });
+            AddTriggeredEventChain(notes, e.id == "atsuta_sword" || e.id == "castle_well", "chain_atsuta_oath", "chain_atsuta_blade", "封じ縄の結び目が刃の影を現実側へ縛った", 1, r => { r.stats.attack += 1; r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 1); });
+            AddTriggeredEventChain(notes, e.id == "library_index" || e.id == "miso_oracle", "chain_boss_broadcast", "chain_boss_forecast", "未来実況が禁書の索引と重なり、次の危険が読めた", 1, r => { r.dangerWarnings += 2; r.stats.mythosKnowledge += 1; });
+            AddTriggeredEventChain(notes, e.id == "centrair_window" || e.id.StartsWith("ai_airport_under_runway_"), "chain_sea_chart", "chain_sea_airport", "海底星図が空港の裏通路へつながった", 1, r => { r.npcAirport += 1; r.dangerWarnings += 1; });
+            AddTriggeredEventChain(notes, e.id == "mikawa_shadow" || e.id == "miso_oracle", "chain_mikawa_seal", "chain_mikawa_counterseal", "逆さ印章が三河の影へ守りの印を押した", 1, r => { r.stats.defense += 1; r.stats.misoResistance += 1; });
+            AddTriggeredEventChain(notes, e.id == "ichinomiya_thread" || e.id == "ai_meieki_memory_lockers_04", "chain_route_thread", "chain_route_weave", "分岐糸が別の道順を織り、危険な枝道を先に知らせた", 1, r => { r.dangerWarnings += 2; r.stats.luck += 1; });
+            return notes.Count == 0 ? "" : string.Join(" / ", notes);
+        }
+        void AddEventChainSeed(string eventId, string sourceEventId, string flag, string label)
+        {
+            if (eventId != sourceEventId || run.flags.Contains(flag))
+                return;
+            run.flags.Add(flag);
+            LogRun("イベント連鎖の種: " + label);
+        }
+        void AddTriggeredEventChain(List<string> notes, bool condition, string requiredFlag, string claimId, string text, int memoryReward, Action<RunState> effect)
+        {
+            if (!condition || !run.flags.Contains(requiredFlag))
+                return;
+            effect?.Invoke(run);
+            int memory = ClaimEventChain(claimId, memoryReward);
+            notes.Add(text + (memory > 0 ? "。記憶片+" + memory : "。"));
+        }
+        int ClaimEventChain(string id, int memoryReward)
+        {
+            if (progress.eventChainClaims.Contains(id))
+                return 0;
+            progress.eventChainClaims.Add(id);
+            progress.memoryFragments += memoryReward;
+            SaveProgress();
+            Play(rewardSfx, 0.45f);
+            return memoryReward;
+        }
+        int EventOutcomeTier(int a, int b, int c, int total, int target)
+        {
+            int dice = a + b + c;
+            int margin = total - target;
+            if (dice >= 18 || margin >= 6)
+                return 1;
+            if (dice <= 3 || margin <= -6)
+                return -1;
+            return 0;
+        }
+        string EventOutcomeLabel(bool success, int outcomeTier)
+        {
+            if (success && outcomeTier > 0)
+                return "大成功";
+            if (!success && outcomeTier < 0)
+                return "大失敗";
+            return success ? "成功" : "失敗";
+        }
+        void ApplyRandomEventCriticalOutcome(RandomEventDef e, bool success, int outcomeTier)
+        {
+            if (run == null || outcomeTier == 0)
+                return;
+            if (success && outcomeTier > 0)
+            {
+                run.stats.money += 70 + Mathf.Max(0, run.instability) * 10;
+                AwardRareMemory(1);
+                if (run.stats.sanity < run.stats.maxSanity)
+                    run.stats.sanity += 1;
+                if (rng.NextDouble() < 0.35)
+                    run.dangerWarnings += 1;
+                return;
+            }
+            if (!success && outcomeTier < 0)
+            {
+                run.stats.hp = Math.Max(0, run.stats.hp - 2);
+                run.stats.sanity = Math.Max(0, run.stats.sanity - 1);
+                run.instability += 1;
+            }
+        }
+        string EventCriticalOutcomeText(RandomEventDef e, bool success, int outcomeTier)
+        {
+            if (outcomeTier == 0)
+                return "";
+            if (success && outcomeTier > 0)
+                return "大成功: 土地が一瞬だけ味方し、記憶片と余剰報酬がこぼれた。";
+            if (!success && outcomeTier < 0)
+                return "大失敗: 土地に見つかった。痛みと周回圧が、足跡へ重く残る。";
+            return "";
         }
         void ApplyRandomEventAftermath(RandomEventDef e, bool success)
         {
@@ -2770,11 +3959,11 @@ namespace AichiFantasy
             string checkName = EventCheckName(e);
             string title = e != null ? e.title : "名のない気配";
             int target = e != null ? e.difficulty : 0;
-            return checkName + "\n\n" +
+            return checkName + "\n" +
                 ShortenForDice(title, 30) +
-                "\n\n      [" + a + "]     [" + b + "]     [" + c + "]" +
-                "\n\n" + DiceProgressText(a, b, c, bonus, target) +
-                "\n\n出目が止まるまで、怪異はまだこちらの名前を知らない。";
+                "\n      [" + a + "]     [" + b + "]     [" + c + "]" +
+                "\n" + DiceProgressText(a, b, c, bonus, target) +
+                "\n出目が止まるまで、怪異はまだこちらの名前を知らない。";
         }
 
         void ShowDiceOverlay(string heading, int a, int b, int c, int bonus, int target)
@@ -2851,15 +4040,15 @@ namespace AichiFantasy
 
         string BuildRandomEventIntroText(RandomEventDef e)
         {
-            return "床下からの呼び声\n\n" + RandomEventBeforeText(e);
+            string title = e != null && !string.IsNullOrWhiteSpace(e.title) ? e.title : "名のない気配";
+            return TrimEventBlankLines(title + "\n" + CompactLine(RandomEventBeforeText(e), 72));
         }
 
         string BuildRandomEventSafeResultText(RandomEventDef e, string happened, string delta)
         {
-            return "兆し: " + CompactLine(RandomEventBeforeText(e), 58) + "\n" +
-                "手応え: 身を低くした\n" +
-                "残響: " + CompactLine(happened, 66) + "\n" +
-                "爪痕: " + CompactStatDelta(delta);
+            return "選択: 身を低くした\n" +
+                "結果: " + CompactLine(happened, 44) + "\n" +
+                "変化: " + CompactStatDelta(delta);
         }
 
         string RandomEventBeforeText(RandomEventDef e)
@@ -3188,9 +4377,10 @@ namespace AichiFantasy
         {
             return 10 + EventCheckBonus(e);
         }
-        string EventRollDetail(RandomEventDef e, int a, int b, int c, int bonus, int total, int target)
+        string EventRollDetail(RandomEventDef e, int a, int b, int c, int bonus, int total, int target, int outcomeTier = 0)
         {
-            return EventCheckName(e) + ": " + a + "/" + b + "/" + c + " + " + bonus + " = " + total + " / 目標 " + target + "\n" + LuckMarginText(total, target);
+            string tier = outcomeTier > 0 ? " / 大成功" : outcomeTier < 0 ? " / 大失敗" : "";
+            return EventCheckName(e) + ": " + a + "/" + b + "/" + c + " + " + bonus + " = " + total + " / 目標 " + target + tier + "\n" + LuckMarginText(total, target);
         }
         int PreviewLuckRoll(int difficulty)
         {
@@ -3339,7 +4529,7 @@ namespace AichiFantasy
             if (run != null && run.stats.sanity <= 0 && bossBattle)
                 EnsureSanityCollapseQueued(!string.IsNullOrEmpty(run.battleReturnScene) ? run.battleReturnScene : run.sceneId);
             enemyId = ResolveMythicBossOverride(enemyId);
-            if (IsBossEnemy(enemyId) && run != null && !run.flags.Contains("final_boss_rush") && !run.flags.Contains("prep_" + enemyId))
+            if (IsBossEnemy(enemyId) && run != null && !run.flags.Contains("random_dungeon") && !run.flags.Contains("final_boss_rush") && !run.flags.Contains("prep_" + enemyId))
             {
                 ShowBossPrep(enemyId);
                 return;
@@ -3367,6 +4557,7 @@ namespace AichiFantasy
             ApplyInstabilityToEnemy(activeEnemy);
             ApplyBossWorldChange(activeEnemy);
             ApplyEnemyThreatBalance(activeEnemy);
+            ApplyRandomDungeonEnemyScaling(activeEnemy);
             if (run.flags.Contains("weaken_" + enemyId))
             {
                 activeEnemy.maxHp = Mathf.CeilToInt(activeEnemy.maxHp * 0.8f);
@@ -3393,6 +4584,21 @@ namespace AichiFantasy
             UpdateSideText();
             AddRetreatOption();
         }
+        void ApplyRandomDungeonEnemyScaling(EnemyDef enemy)
+        {
+            if (enemy == null || run == null || !run.flags.Contains("random_dungeon"))
+                return;
+            int floor = Mathf.Max(1, run.randomDungeonFloor);
+            float hpRate = 1f + floor * (IsBossEnemy(enemy.id) ? 0.09f : 0.07f);
+            float attackRate = 1f + floor * (IsBossEnemy(enemy.id) ? 0.055f : 0.045f);
+            enemy.maxHp = Mathf.CeilToInt(enemy.maxHp * hpRate);
+            enemy.hp = enemy.maxHp;
+            enemy.attack = Mathf.CeilToInt(enemy.attack * attackRate);
+            enemy.defense += floor / 7;
+            enemy.sanityDamage += floor / 12;
+            enemy.reward += floor * (IsBossEnemy(enemy.id) ? 3 : 2);
+            enemy.intro += "\n\n完全ランダムダンジョン深層補正: B" + floor + "F。敵の輪郭が複数STAGEぶん重なっている。";
+        }
         string ResolveMythicBossOverride(string enemyId)
         {
             if (run == null || enemyId == "impossible_one")
@@ -3412,6 +4618,8 @@ namespace AichiFantasy
         }
         bool TryShowImpossibleNonBossEncounter(string targetSceneId)
         {
+            if (run == null || !run.flags.Contains("allow_impossible_nonboss"))
+                return false;
             if (run == null || !enemies.ContainsKey("impossible_one"))
                 return false;
             if (run.stats.sanity <= 0 || run.sanityCollapseTurns >= 0)
@@ -3594,7 +4802,7 @@ namespace AichiFantasy
                 run.stats.hp = Mathf.Max(0, run.stats.hp - damage);
                 bodyText.text = "逃げ道が一拍遅れて閉じた。\n\n撤退失敗。HP -" + damage;
                 if (run.stats.hp <= 0)
-                    ShowEnding(activeEnemy.defeatEnding);
+                    ShowEnding(DefeatEndingForHpLoss(activeEnemy));
                 else
                     BeginAttackPhase();
             }
@@ -3667,6 +4875,12 @@ namespace AichiFantasy
                 damage += 2 + run.stats.attack / 3;
             if (run.character.id == "gamagori_diver" && gaugePower >= 0.65f && (activeEnemy.image == "gamagori" || activeEnemy.id == "deep_one_clerk" || activeEnemy.id == "stage_boss_4"))
                 damage += 4;
+            if (run.character.id == "inuyama_mask" && IsBossEnemy(activeEnemy.id) && gaugePower >= 0.65f)
+                damage += 4 + Mathf.Max(1, run.stats.luck / 4);
+            if (run.character.id == "tsuruma_librarian" && gaugePower >= 0.70f)
+                damage += 3 + run.stats.mythosKnowledge;
+            if (run.character.id == "centrair_agent" && IsMachineOrAirportEnemy(activeEnemy) && gaugePower >= 0.60f)
+                damage += 5 + run.npcAirport;
             if (run.character.id == "final_observer")
             {
                 damage += gaugePower >= 0.70f ? 18 + run.stats.mythosKnowledge * 2 : 3;
@@ -3797,6 +5011,18 @@ namespace AichiFantasy
                 sanityLoss += 1;
             if (run.character.id == "atsuta_miko" && IsBossEnemy(activeEnemy.id))
                 sanityLoss = Mathf.Max(0, sanityLoss - 1);
+            if (run.character.id == "arimatsu_weaver" && rng.NextDouble() < Mathf.Clamp01(0.12f + run.stats.luck * 0.006f))
+            {
+                damage = Mathf.Max(1, Mathf.CeilToInt(damage * 0.45f));
+                sanityLoss = Mathf.Max(0, sanityLoss - 1);
+            }
+            if (run.character.id == "inuyama_mask" && IsBossEnemy(activeEnemy.id) && battleRound % 3 == 1)
+                damage = Mathf.Max(1, damage - 3);
+            if (run.character.id == "centrair_agent" && IsMachineOrAirportEnemy(activeEnemy))
+            {
+                damage = Mathf.Max(1, damage - 2);
+                sanityLoss = Mathf.Max(0, sanityLoss - 1);
+            }
             string pressureText = ApplyEnemyAttackModifiers(ref damage, ref sanityLoss);
             run.stats.hp = Mathf.Max(0, run.stats.hp - damage);
             run.stats.sanity = Mathf.Max(0, run.stats.sanity - sanityLoss);
@@ -3805,7 +5031,7 @@ namespace AichiFantasy
             UpdateSideText();
             if (run.stats.hp <= 0)
             {
-                ShowEnding(activeEnemy.defeatEnding);
+                ShowEnding(DefeatEndingForHpLoss(activeEnemy));
                 return;
             }
           if (run.stats.sanity <= 0)
@@ -3822,6 +5048,14 @@ namespace AichiFantasy
             battleRound++;
             battleText.text = "Round " + battleRound + "\n敵の次行動を警戒";
             ScheduleEnemyAttack();
+        }
+        string DefeatEndingForHpLoss(EnemyDef enemy)
+        {
+            if (enemy == null || string.IsNullOrEmpty(enemy.defeatEnding))
+                return "event_death";
+            if (enemy.defeatEnding == "madness")
+                return "event_death";
+            return enemy.defeatEnding;
         }
         string ApplyEnemyAttackModifiers(ref int damage, ref int sanityLoss)
         {
@@ -4345,6 +5579,7 @@ namespace AichiFantasy
                 enemy.sanityDamage += stage1Boss ? 0 : 1;
                 enemy.reward = Mathf.CeilToInt(enemy.reward * 1.18f);
                 enemy.intro += "\n\n正面から削り切るには重い。ゲージを溜め、準備と弱点で輪郭を崩す必要がある。";
+                ApplyStageRouteEnemyModifiers(enemy);
                 return;
             }
             if (IsStage1Enemy(enemy.id))
@@ -4353,6 +5588,7 @@ namespace AichiFantasy
                 enemy.hp = enemy.maxHp;
                 enemy.attack = Mathf.CeilToInt(enemy.attack * 1.05f);
                 enemy.reward = Mathf.CeilToInt(enemy.reward * 1.05f);
+                ApplyStageRouteEnemyModifiers(enemy);
                 return;
             }
             enemy.maxHp = Mathf.CeilToInt(enemy.maxHp * 1.14f);
@@ -4361,6 +5597,51 @@ namespace AichiFantasy
             enemy.defense += enemy.maxHp >= 35 ? 1 : 0;
             enemy.sanityDamage += enemy.sanityDamage >= 4 ? 1 : 0;
             enemy.reward = Mathf.CeilToInt(enemy.reward * 1.08f);
+            ApplyStageRouteEnemyModifiers(enemy);
+        }
+        void ApplyStageRouteEnemyModifiers(EnemyDef enemy)
+        {
+            if (enemy == null || run == null)
+                return;
+            int stageNo = EnemyStageNo(enemy.id);
+            if (stageNo <= 0)
+                return;
+            string route = StageRouteKey(stageNo);
+            if (route == "side")
+            {
+                enemy.maxHp = Mathf.CeilToInt(enemy.maxHp * 1.08f);
+                enemy.hp = enemy.maxHp;
+                enemy.reward = Mathf.CeilToInt(enemy.reward * 1.18f);
+                enemy.intro += "\n\n脇道で拾った余分な気配が、敵の背中にも張り付いている。";
+            }
+            else if (route == "forbidden")
+            {
+                enemy.maxHp = Mathf.CeilToInt(enemy.maxHp * 1.12f);
+                enemy.hp = enemy.maxHp;
+                enemy.attack = Mathf.CeilToInt(enemy.attack * 1.10f);
+                enemy.sanityDamage += 1;
+                enemy.reward = Mathf.CeilToInt(enemy.reward * 1.28f);
+                enemy.intro += "\n\n禁じ札の道を選んだせいで、怪異は名前を一つ多く持っている。";
+            }
+            else if (route == "shortcut")
+            {
+                enemy.attack = Mathf.CeilToInt(enemy.attack * 1.08f);
+                enemy.speed += 1;
+                enemy.intro += "\n\n近道は敵にも近い。反応の遅れが、そのまま傷になる。";
+            }
+        }
+        int EnemyStageNo(string enemyId)
+        {
+            if (string.IsNullOrEmpty(enemyId) || !enemyId.StartsWith("stage"))
+                return 0;
+            int start = enemyId.StartsWith("stage_boss_") ? "stage_boss_".Length : 5;
+            int end = enemyId.IndexOf('_', start);
+            if (end < 0)
+                end = enemyId.Length;
+            int stageNo;
+            if (!int.TryParse(enemyId.Substring(start, end - start), out stageNo))
+                return 0;
+            return Mathf.Clamp(stageNo, 1, 5);
         }
         bool IsStage1Enemy(string enemyId)
         {
@@ -4384,6 +5665,7 @@ namespace AichiFantasy
                 progress.bossesDefeated.Add(activeEnemy.id);
             if (!progress.monsterWeaknesses.Contains(activeEnemy.id))
                 progress.monsterWeaknesses.Add(activeEnemy.id);
+            CheckCharacterGoals("", activeEnemy.id);
             CheckMilestones();
             SaveProgress();
             Play(rewardSfx);
@@ -4408,18 +5690,30 @@ namespace AichiFantasy
                           activeEnemy.id == "piyorin" ? "nagoya_after_battle" :
                           activeEnemy.id == "miso_voice" ? "okazaki_after_battle" :
                           activeEnemy.id == "gate_guard" ? "airport_gate" : "nagoya_after_battle";
+            bool randomDungeonBattle = run.flags.Contains("random_dungeon");
+            bool randomDungeonBoss = randomDungeonBattle && activeEnemy.id.StartsWith("stage_boss_");
+            if (randomDungeonBattle)
+            {
+                next = "random_dungeon_continue";
+                if (randomDungeonBoss)
+                    run.randomDungeonBossCleared = true;
+            }
+            int ticketReward = randomDungeonBattle ? AwardRandomDungeonTickets(randomDungeonBoss) : 0;
             run.battleReturnScene = null;
             run.pendingGear = GenerateRandomGear(activeEnemy.reward + run.instability * 2);
             LogRun("戦闘勝利: " + activeEnemy.name + " 所持金+" + moneyReward + (memoryReward > 0 ? " / 記憶片+" + memoryReward : ""));
-            bodyText.text = activeEnemy.victoryText + "\n\n所持金 +" + moneyReward + (memoryReward > 0 ? "\n記憶片 +" + memoryReward : "\n記憶片は残らなかった。");
+            bodyText.text = activeEnemy.victoryText + "\n\n所持金 +" + moneyReward + (memoryReward > 0 ? "\n記憶片 +" + memoryReward : "\n記憶片は残らなかった。") + (ticketReward > 0 ? "\nガチャチケット +" + ticketReward : "");
             battleRoot.gameObject.SetActive(false);
           choiceRoot.gameObject.SetActive(true);
             ClearChoices();
             enemyAttackTimer = 0f;
+            bool stageBossCleared = activeEnemy.id.StartsWith("stage_boss_") && !randomDungeonBattle;
             activeEnemy = null;
-            AddChoiceButton("戦利品を見る", () => ShowGearOffer(next));
+            AddChoiceButton("戦利品を見る", () => ShowGearOffer(next, stageBossCleared || randomDungeonBoss));
+            if (stageBossCleared)
+                AddChoiceButton("拠点へ帰還\n装備と報酬を持ち帰る", () => ShowEnding("return"));
             UpdateSideText();
-            AddChoiceButton("次に進む", () => ShowScene(next));
+            AddChoiceButton("次に進む", () => ContinueAfterGearOffer(next, stageBossCleared || randomDungeonBoss));
         }
         int BattleMemoryReward(string enemyId)
         {
@@ -4433,6 +5727,15 @@ namespace AichiFantasy
             if (enemyId == "impossible_one")
                 return run != null && run.flags.Contains("final_boss_rush") ? 5 : 0;
             return 0;
+        }
+        int AwardRandomDungeonTickets(bool boss)
+        {
+            if (run == null || !run.flags.Contains("random_dungeon"))
+                return 0;
+            int floor = Mathf.Max(1, run.randomDungeonFloor);
+            int tickets = boss ? 5 + floor / 10 : 1 + floor / 25;
+            progress.gachaTickets += tickets;
+            return tickets;
         }
         int AwardRareMemory(int requested)
         {
@@ -4548,9 +5851,10 @@ namespace AichiFantasy
         int SelectDropRarityTier(int power)
         {
             float pressure = Mathf.Clamp01(power / 34f);
-            float orange = 0.006f + pressure * 0.028f + run.instability * 0.002f;
-            float purple = 0.034f + pressure * 0.078f + run.instability * 0.006f;
-            float green = 0.18f + pressure * 0.105f + run.instability * 0.004f;
+            int instability = run != null ? run.instability : 0;
+            float orange = 0.006f + pressure * 0.028f + instability * 0.002f;
+            float purple = 0.034f + pressure * 0.078f + instability * 0.006f;
+            float green = 0.18f + pressure * 0.105f + instability * 0.004f;
             double roll = rng.NextDouble();
             if (roll < orange) return 3;
             if (roll < orange + purple) return 2;
@@ -4642,11 +5946,11 @@ namespace AichiFantasy
             if (name.StartsWith("貴重な")) return name.Substring(3);
             return name;
         }
-        void ShowGearOffer(string next)
+        void ShowGearOffer(string next, bool allowStageReturn = false)
         {
             if (run.pendingGear == null)
             {
-                ShowScene(next);
+                ContinueAfterGearOffer(next, allowStageReturn);
                 return;
            }
             var current = CurrentGearForSlot(run.pendingGear.slot);
@@ -4654,10 +5958,45 @@ namespace AichiFantasy
             areaText.text = run.pendingGear.rarity + " / " + run.pendingGear.slot;
             bodyText.text = GearAcquisitionText(run.pendingGear) + "\n\n" + GearComparison(run.pendingGear, current);
             ClearChoices();
-            AddChoiceButton("装備する", () => { LogRun("装備変更: " + GearShortName(run.pendingGear)); EquipGear(run.pendingGear); run.pendingGear = null; UpdateSideText(); ShowScene(next); });
-            AddChoiceButton("倉庫へ送る\n喪失リスク", () => TryStorePendingGear(next));
-            AddChoiceButton("捨てる", () => { run.pendingGear = null; ShowScene(next); });
+            AddChoiceButton("装備する", () =>
+            {
+                LogRun("装備変更: " + GearShortName(run.pendingGear));
+                EquipGear(run.pendingGear);
+                run.pendingGear = null;
+                UpdateSideText();
+                ContinueAfterGearOffer(next, allowStageReturn);
+            });
+            AddChoiceButton("倉庫へ送る\n喪失リスク", () => TryStorePendingGear(next, allowStageReturn));
+            AddChoiceButton("捨てる", () => { run.pendingGear = null; ContinueAfterGearOffer(next, allowStageReturn); });
+            if (allowStageReturn)
+                AddChoiceButton("拠点へ帰還\n装備と報酬を持ち帰る", () => ShowEnding("return"));
             footerText.text = "希少度: " + GearRarityScarcity(run.pendingGear.rarity) + " / " + GearRarityPowerText(run.pendingGear);
+        }
+        void ContinueAfterGearOffer(string next, bool allowStageReturn)
+        {
+            if (next == "random_dungeon_continue")
+            {
+                if (run.randomDungeonBossCleared)
+                    ShowRandomDungeonBossClear();
+                else
+                    AdvanceRandomDungeonFloor();
+                return;
+            }
+            if (!allowStageReturn)
+            {
+                ShowScene(next, false);
+                return;
+            }
+            titleText.text = "STAGEクリア";
+            areaText.text = "帰還選択";
+            bodyText.text = "STAGEボスを越えた。\n\nこのまま次のSTAGEへ進むか、いったん拠点へ帰って装備と報酬を倉庫へ持ち帰れる。帰還すると周回は終了するが、装備・記憶片・保険札が次へ残る。";
+            footerText.text = "進むほど報酬は伸びる。戻れば成果を固定できる。";
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            ClearChoices();
+            AddChoiceButton("拠点へ帰還\n装備と報酬を持ち帰る", () => ShowEnding("return"));
+            AddChoiceButton("次のSTAGEへ進む", () => ShowScene(next, false));
+            UpdateSideText();
         }
         Gear CurrentGearForSlot(string slot)
         {
@@ -4671,11 +6010,20 @@ namespace AichiFantasy
             else if (gear.slot == "装飾品") run.accessory = gear;
             else run.weapon = gear;
         }
+        void EquipGearAndStorePrevious(Gear gear)
+        {
+            if (gear == null || IsEmptyGear(gear))
+                return;
+            var current = CurrentGearForSlot(gear.slot);
+            if (current != null && !IsEmptyGear(current))
+                StoreGear(current);
+            EquipGear(gear);
+        }
         string GearSummary(Gear gear)
         {
             if (gear == null || IsEmptyGear(gear)) return "装備なし";
             string effect = string.IsNullOrEmpty(gear.effect) ? "" : "\n効果: " + GearEffectText(gear.effect);
-            return gear.name + " [" + gear.rarity + "]\n攻+" + gear.attack + " 防+" + gear.defense + " 速+" + gear.speed + " LUK+" + gear.luck + effect + "\n" + gear.note;
+            return GearDisplayName(gear) + " [" + gear.rarity + "]\n攻+" + gear.attack + " 防+" + gear.defense + " 速+" + gear.speed + " LUK+" + gear.luck + effect + "\n" + gear.note;
         }
         string GearComparison(Gear next, Gear current)
         {
@@ -4691,7 +6039,7 @@ namespace AichiFantasy
             if (gear == null || IsEmptyGear(gear))
                 return "戦利品は境界の向こうへ沈んだ。";
 
-            return "戦利品: " + gear.name + "\n" +
+            return "戦利品: " + GearDisplayName(gear) + "\n" +
                    "希少度 " + gear.rarity + " - " + GearRarityScarcity(gear.rarity) + "\n" +
                    GearRarityPowerText(gear) + "\n" +
                    GearEffectAcquisitionText(gear) + "\n" +
@@ -4763,7 +6111,7 @@ namespace AichiFantasy
         {
             if (gear == null || IsEmptyGear(gear)) return "装備なし";
             string effect = string.IsNullOrEmpty(gear.effect) ? "" : " / " + ShortGearEffectName(gear.effect);
-            return gear.name + " [" + gear.rarity + "] 攻" + Signed(gear.attack) + " 防" + Signed(gear.defense) + " 速" + Signed(gear.speed) + " LUK" + Signed(gear.luck) + effect;
+            return GearDisplayName(gear) + " [" + gear.rarity + "] 攻" + Signed(gear.attack) + " 防" + Signed(gear.defense) + " 速" + Signed(gear.speed) + " LUK" + Signed(gear.luck) + effect;
         }
         string ShortGearEffectName(string effect)
         {
@@ -4825,13 +6173,13 @@ namespace AichiFantasy
                 return;
             effects.Add(ShortGearEffectName(gear.effect));
         }
-        void TryStorePendingGear(string next)
+        void TryStorePendingGear(string next, bool allowStageReturn = false)
         {
             var gear = run.pendingGear;
             run.pendingGear = null;
             if (gear == null)
             {
-                ShowScene(next);
+                ContinueAfterGearOffer(next, allowStageReturn);
                 return;
             }
             float chance = 0.84f + run.stats.luck * 0.012f - run.instability * 0.045f - RarityTransferPenalty(gear);
@@ -4844,7 +6192,7 @@ namespace AichiFantasy
             {
                 StoreGear(gear);
                 LogRun("倉庫転送成功: " + GearShortName(gear));
-               bodyText.text = gear.name + " を倉庫へ転送した。\n\n成功率 " + Mathf.RoundToInt(chance * 100f) + "%。今回は境界が装備を飲み込まなかった。";
+               bodyText.text = GearDisplayName(gear) + " を倉庫へ転送した。\n\n成功率 " + Mathf.RoundToInt(chance * 100f) + "%。今回は境界が装備を飲み込まなかった。";
                 Play(rewardSfx);
             }
             else
@@ -4853,11 +6201,13 @@ namespace AichiFantasy
                 progress.brokenGear.Add(broken);
                 SaveProgress();
                 LogRun("倉庫転送失敗: " + GearShortName(gear));
-                bodyText.text = gear.name + " の倉庫転送に失敗した。\n\n成功率 " + Mathf.RoundToInt(chance * 100f) + "%。装備は境界で砕け、破損記録だけが残った。";
+                bodyText.text = GearDisplayName(gear) + " の倉庫転送に失敗した。\n\n成功率 " + Mathf.RoundToInt(chance * 100f) + "%。装備は境界で砕け、破損記録だけが残った。";
                 Play(doomSfx);
             }
             UpdateSideText();
-            AddChoiceButton("次に進む", () => ShowScene(next));
+            AddChoiceButton("次に進む", () => ContinueAfterGearOffer(next, allowStageReturn));
+            if (allowStageReturn)
+                AddChoiceButton("拠点へ帰還\n装備と報酬を持ち帰る", () => ShowEnding("return"));
         }
         float RarityTransferPenalty(Gear gear)
         {
@@ -4869,8 +6219,13 @@ namespace AichiFantasy
         void StoreGear(Gear gear)
         {
             if (gear == null || IsEmptyGear(gear)) return;
-            progress.warehouseGear.Add(SerializeGear(gear));
+            StoreGearWithoutSaving(gear);
             SaveProgress();
+        }
+        void StoreGearWithoutSaving(Gear gear)
+        {
+            if (gear == null || IsEmptyGear(gear)) return;
+            progress.warehouseGear.Add(SerializeGear(gear));
         }
         string SerializeGear(Gear gear)
         {
@@ -4879,8 +6234,9 @@ namespace AichiFantasy
         Gear DeserializeGear(string data)
         {
           var p = data.Split('|');
-            if (p.Length < 9 || !gears.ContainsKey(p[0])) return null;
-            var gear = gears[p[0]].Clone();
+            if (p.Length < 9) return null;
+            Gear gear = gears.ContainsKey(p[0]) ? gears[p[0]].Clone() : new Gear { id = p[0], kind = "一品物" };
+            gear.id = p[0];
             gear.name = p[1]; gear.slot = p[2]; gear.rarity = p[3];
             int.TryParse(p[4], out gear.attack);
             int.TryParse(p[5], out gear.defense);
@@ -4888,7 +6244,13 @@ namespace AichiFantasy
             int.TryParse(p[7], out gear.luck);
             gear.note = p[8];
             gear.effect = p.Length >= 10 ? p[9] : "";
-            ApplyGearRarity(gear);
+            if (string.IsNullOrEmpty(gear.kind))
+                gear.kind = "一品物";
+            if (string.IsNullOrEmpty(gear.slot))
+                gear.slot = gear.attack > gear.defense ? "武器" : "防具";
+            if (string.IsNullOrEmpty(gear.rarity))
+                gear.rarity = "白";
+            gear.score = GearScore(gear);
             return gear;
         }
         void RegisterMonsterSeen(string monsterId)
@@ -4951,9 +6313,10 @@ namespace AichiFantasy
                 case "miso_sink": return "味噌沈降";
                 case "machine_part": return "効率化";
                 case "madness": return "神話開眼";
+                case "event_death": return "戦闘不能";
                 case "piyorin_bad": return "黄色い圧";
                 case "airport_lost": return "荷物検査";
-               default: return "永住";
+               default: return "消息不明";
             }
         }
         void RegisterVictoryCounter(string enemyId)
@@ -4967,10 +6330,13 @@ namespace AichiFantasy
         }
         void CheckMilestones()
         {
-            ClaimMilestone("piyorin_1", progress.piyorinVictories >= 1, "黄色い群体を初撃破。記憶片+1。", 1, 0);
-            ClaimMilestone("piyorin_3", progress.piyorinVictories >= 3, "黄色い群体撃破3回。保険札+1。", 0, 1);
-            ClaimMilestone("miso_1", progress.misoVictories >= 1, "味噌樽の声を鎮めた。記憶片+1。", 1, 0);
-            ClaimMilestone("gate_1", progress.gateVictories >= 1, "搭乗検査官を突破。保険札+1。", 0, 1);
+            foreach (var achievement in AchievementDefinitions())
+                ClaimMilestone(
+                    achievement.id,
+                    achievement.condition != null && achievement.condition(),
+                    achievement.title + "。記憶片+" + achievement.memoryReward + (achievement.insuranceReward > 0 ? " / 保険札+" + achievement.insuranceReward : "") + "。",
+                    achievement.memoryReward,
+                    achievement.insuranceReward);
         }
         void ClaimMilestone(string id, bool condition, string message, int memory, int insurance)
         {
@@ -4979,8 +6345,170 @@ namespace AichiFantasy
             progress.milestoneClaims.Add(id);
             progress.memoryFragments += memory;
             progress.insuranceTickets += insurance;
+            SaveProgress();
             footerText.text = "実績: " + message;
             Play(rewardSfx);
+        }
+        void CheckCharacterGoals(string endingId = "", string defeatedEnemyId = "")
+        {
+            if (run == null || run.character == null)
+                return;
+            foreach (var goal in CharacterGoalDefinitions())
+            {
+                if (goal.characterId != run.character.id || progress.personalGoalClaims.Contains(goal.id))
+                    continue;
+                if (goal.condition == null || !goal.condition(endingId, defeatedEnemyId))
+                    continue;
+                progress.personalGoalClaims.Add(goal.id);
+                progress.memoryFragments += goal.memoryReward;
+                SaveProgress();
+                footerText.text = "個人目標: " + goal.title + "。記憶片+" + goal.memoryReward + "。";
+                Play(rewardSfx);
+            }
+        }
+        List<CharacterGoalDef> CharacterGoalDefinitions()
+        {
+            return new List<CharacterGoalDef>
+            {
+                CharacterGoal("traveler_goal_return", "traveler", "無事に帰る旅人", "帰還系ENDへ到達する。", 4, (ending, enemy) => IsEscapeEnding(ending)),
+                CharacterGoal("worker_goal_airport", "worker", "出張先の危機対応", "機械・空港系の敵を撃破する。", 4, (ending, enemy) => EnemyLooksMachineOrAirport(enemy)),
+                CharacterGoal("local_goal_routes", "local", "地元の抜け道帳", "地元知識を8以上にして周回を終える。", 4, (ending, enemy) => IsRunEndingContext(ending) && run.stats.localKnowledge >= 8),
+                CharacterGoal("occult_goal_index", "occult", "禁じた索引", "神話理解を8以上にして周回を終える。", 5, (ending, enemy) => IsRunEndingContext(ending) && run.stats.mythosKnowledge >= 8),
+                CharacterGoal("samurai_goal_boss", "samurai", "三河武士の名乗り", "ボスを撃破する。", 5, (ending, enemy) => IsBossEnemy(enemy)),
+                CharacterGoal("mechanic_goal_machine", "mechanic", "整備士の現場復旧", "機械・空港系の敵を撃破する。", 5, (ending, enemy) => EnemyLooksMachineOrAirport(enemy)),
+                CharacterGoal("shachi_seen_goal_castle", "shachi_seen", "金鯱の視線返し", "尾張・鯱系のボスを撃破する。", 6, (ending, enemy) => enemy == "stage_boss_2" || enemy == "well_tentacle" || ending == "true_shachi"),
+                CharacterGoal("atsuta_miko_goal_ward", "atsuta_miko", "封じ縄の守り手", "SANを20以上残してボスを撃破する。", 6, (ending, enemy) => IsBossEnemy(enemy) && run.stats.sanity >= 20),
+                CharacterGoal("seto_potter_goal_armor", "seto_potter", "窯守の装甲", "HPを半分以上残してボスを撃破する。", 6, (ending, enemy) => IsBossEnemy(enemy) && run.stats.hp * 2 >= run.stats.maxHp),
+                CharacterGoal("toyohashi_conductor_goal_speed", "toyohashi_conductor", "終電より速く", "速さを22以上にして周回を終える。", 6, (ending, enemy) => IsRunEndingContext(ending) && run.stats.speed >= 22),
+                CharacterGoal("gamagori_diver_goal_sea", "gamagori_diver", "海底星図の突破", "知多・海底系のボスを撃破する。", 7, (ending, enemy) => enemy == "stage_boss_4" || enemy == "deep_one_clerk" || ending == "chita_sea_takeoff"),
+                CharacterGoal("arimatsu_weaver_goal_luck", "arimatsu_weaver", "ほどけない分岐糸", "LUKを28以上にして周回を終える。", 7, (ending, enemy) => IsRunEndingContext(ending) && run.stats.luck >= 28),
+                CharacterGoal("inuyama_mask_goal_mask", "inuyama_mask", "面の内側を保つ", "SANを20以上残してボスを撃破する。", 8, (ending, enemy) => IsBossEnemy(enemy) && run.stats.sanity >= 20),
+                CharacterGoal("tsuruma_librarian_goal_mythos", "tsuruma_librarian", "禁書司書の返却印", "神話理解を30以上にする、またはありえない敵を撃破する。", 9, (ending, enemy) => run.stats.mythosKnowledge >= 30 || enemy == "impossible_one"),
+                CharacterGoal("centrair_agent_goal_gate", "centrair_agent", "境界職員の帰還便", "空港突破系ENDへ到達する。", 10, (ending, enemy) => ending == "normal_clear" || ending == "true_shachi"),
+                CharacterGoal("final_observer_goal_final", "final_observer", "観測者の完了記録", "最終EDへ到達する。", 20, (ending, enemy) => ending == "final_observer_end")
+            };
+        }
+        CharacterGoalDef CharacterGoal(string id, string characterId, string title, string description, int memory, Func<string, string, bool> condition)
+        {
+            return new CharacterGoalDef
+            {
+                id = id,
+                characterId = characterId,
+                title = title,
+                description = description,
+                memoryReward = memory,
+                condition = condition
+            };
+        }
+        bool IsRunEndingContext(string endingId)
+        {
+            return !string.IsNullOrEmpty(endingId);
+        }
+        bool EnemyLooksMachineOrAirport(string enemyId)
+        {
+            if (string.IsNullOrEmpty(enemyId))
+                return false;
+            if (enemyId.Contains("gate") || enemyId.Contains("window") || enemyId.Contains("baggage") || enemyId.Contains("airport") || enemyId == "stage_boss_5")
+                return true;
+            if (!enemies.ContainsKey(enemyId))
+                return false;
+            var enemy = enemies[enemyId];
+            return enemy.image == "airport" || enemy.image == "toyota" || enemy.image == "kariya";
+        }
+        string CharacterGoalLine(CharacterDef character)
+        {
+            foreach (var goal in CharacterGoalDefinitions())
+            {
+                if (goal.characterId != character.id)
+                    continue;
+                string status = progress.personalGoalClaims.Contains(goal.id) ? "達成済" : "未達成";
+                return "[" + status + "] " + goal.title + "\n" + goal.description + "\n報酬: 記憶片+" + goal.memoryReward;
+            }
+            return "このキャラの個人目標は未設定。";
+        }
+        string BuildCharacterGoalSummary()
+        {
+            var lines = new List<string>();
+            int claimed = 0;
+            var goals = CharacterGoalDefinitions();
+            foreach (var goal in goals)
+            {
+                bool received = progress.personalGoalClaims.Contains(goal.id);
+                if (received)
+                    claimed++;
+                string characterName = characters.ContainsKey(goal.characterId) ? characters[goal.characterId].name : goal.characterId;
+                lines.Add("・[" + (received ? "達成済" : "未達成") + "] " + characterName + " / " + goal.title + "\n  " + goal.description + "\n  報酬: 記憶片+" + goal.memoryReward);
+            }
+            return "個人目標: " + claimed + "/" + goals.Count + " 達成\n" + string.Join("\n", lines);
+        }
+        List<AchievementDef> AchievementDefinitions()
+        {
+            return new List<AchievementDef>
+            {
+                Achievement("piyorin_1", "黄色い群体を初撃破", "ぴよりん系の怪異を1回撃破する。", 1, 0, () => progress.piyorinVictories >= 1),
+                Achievement("piyorin_3", "黄色い群体を3回撃破", "ぴよりん系の怪異を3回撃破する。", 2, 1, () => progress.piyorinVictories >= 3),
+                Achievement("miso_1", "味噌樽の声を鎮めた", "味噌樽の声を1回撃破する。", 1, 0, () => progress.misoVictories >= 1),
+                Achievement("gate_1", "搭乗検査官を突破", "搭乗検査官を1回撃破する。", 2, 1, () => progress.gateVictories >= 1),
+                Achievement("first_return", "はじめての帰還", "帰還系ENDへ到達する。", 3, 0, () => HasAnyEnding("return", "normal_clear", "true_shachi", "impossible_true", "final_observer_end")),
+                Achievement("endings_3", "三つの結末", "ENDを3種類見る。", 3, 0, () => progress.endings.Count >= 3),
+                Achievement("endings_5", "五つの結末", "ENDを5種類見る。", 5, 0, () => progress.endings.Count >= 5),
+                Achievement("deaths_3", "死因図鑑 三項目", "死因を3種類登録する。", 2, 0, () => progress.deaths.Count >= 3),
+                Achievement("deaths_5", "死因図鑑 五項目", "死因を5種類登録する。", 4, 0, () => progress.deaths.Count >= 5),
+                Achievement("monsters_5", "怪異図鑑 五体", "怪異を5種類記録する。", 2, 0, () => progress.seenMonsters.Count >= 5),
+                Achievement("monsters_10", "怪異図鑑 十体", "怪異を10種類記録する。", 4, 0, () => progress.seenMonsters.Count >= 10),
+                Achievement("bosses_1", "STAGEボス初撃破", "ボスを1体撃破する。", 3, 0, () => progress.bossesDefeated.Count >= 1),
+                Achievement("bosses_3", "ボス討伐 三体", "ボスを3体撃破する。", 6, 0, () => progress.bossesDefeated.Count >= 3),
+                Achievement("bosses_5", "五つの門を越えた", "ボスを5体撃破する。", 10, 1, () => progress.bossesDefeated.Count >= 5),
+                Achievement("warehouse_3", "倉庫の支度", "倉庫装備を3個以上持つ。", 2, 0, () => progress.warehouseGear.Count >= 3),
+                Achievement("awakened_1", "装備覚醒", "覚醒装備を1個作る。", 4, 0, () => progress.awakenedGear.Count >= 1),
+                Achievement("choices_10", "記憶した選択肢", "選択肢を10種類記憶する。", 3, 0, () => progress.rememberedChoices.Count >= 10),
+                Achievement("instability_3", "中層不安定度解放", "不安定度3を解放する。", 3, 0, () => progress.maxInstabilityUnlocked >= 3),
+                Achievement("instability_5", "最高不安定度解放", "不安定度5を解放する。", 8, 1, () => progress.maxInstabilityUnlocked >= 5)
+            };
+        }
+        AchievementDef Achievement(string id, string title, string description, int memory, int insurance, Func<bool> condition)
+        {
+            return new AchievementDef
+            {
+                id = id,
+                title = title,
+                description = description,
+                memoryReward = memory,
+                insuranceReward = insurance,
+                condition = condition
+            };
+        }
+        bool HasAnyEnding(params string[] ids)
+        {
+            if (progress == null || progress.endings == null)
+                return false;
+            foreach (string id in ids)
+            {
+                if (progress.endings.Contains(id))
+                    return true;
+            }
+            return false;
+        }
+        string BuildAchievementSummary()
+        {
+            CheckMilestones();
+            var list = AchievementDefinitions();
+            int claimed = 0;
+            int available = 0;
+            var lines = new List<string>();
+            foreach (var achievement in list)
+            {
+                bool done = achievement.condition != null && achievement.condition();
+                bool received = progress.milestoneClaims.Contains(achievement.id);
+                if (received)
+                    claimed++;
+                if (done && !received)
+                    available++;
+                string status = received ? "受取済" : done ? "達成" : "未達成";
+                string reward = "記憶片+" + achievement.memoryReward + (achievement.insuranceReward > 0 ? " / 保険札+" + achievement.insuranceReward : "");
+                lines.Add("・[" + status + "] " + achievement.title + " / " + reward + "\n  " + achievement.description);
+            }
+            return "実績: " + claimed + "/" + list.Count + "  未受取: " + available + "\n" + string.Join("\n", lines);
         }
         void ShowEnding(string endingId)
         {
@@ -5041,6 +6569,11 @@ namespace AichiFantasy
                     endingBody = "見てはいけない構造が見えた。\n\n出口とは、内側へ進むための言葉だった。";
                     reward = 9;
                     break;
+                case "event_death":
+                    endingTitle = "戦闘不能";
+                    endingBody = "怪異の一撃で視界が暗転した。\n\n最後に残ったのは、痛みではなく、まだ選べたはずの一手だけだった。";
+                    reward = 7;
+                    break;
                 case "meieki_mythos":
                     endingTitle = "名駅最下層";
                     endingBody = "あなたは名駅の底が駅ではなく、愛知という夢を見るための器官だと理解した。\n\n次の電車は来ない。あなた自身が、地下へ続く路線図になった。";
@@ -5072,9 +6605,9 @@ namespace AichiFantasy
                     reward = 14;
                     break;
                 default:
-                    endingTitle = "永住";
-                    endingBody = "モーニングは毎朝出てくる。\n\n断らなければ、ここはとても優しい場所だった。";
-                    reward = 8;
+                    endingTitle = "消息不明";
+                    endingBody = "記録に残ったのは、途切れた足音と、読めない行き先だけだった。\n\n異界愛知は、原因を説明しないまま静かにページを閉じた。";
+                    reward = 6;
                     break;
             }
             int moneyReward = Mathf.CeilToInt(reward * (run != null ? run.character.rewardRate : 1f)) * 10;
@@ -5084,6 +6617,8 @@ namespace AichiFantasy
             if (run != null)
                 run.stats.money += moneyReward;
             progress.memoryFragments += lastReward;
+            string safeReturnReport = ApplySafeReturnBonus(endingId);
+            string escapedGearReport = StoreEscapedGear(endingId);
             if (!progress.endings.Contains(endingId))
                 progress.endings.Add(endingId);
             if (endingId != "return" && endingId != "normal_clear" && endingId != "true_shachi" && endingId != "impossible_true" && endingId != "final_observer_end" && !progress.deaths.Contains(endingId))
@@ -5093,26 +6628,68 @@ namespace AichiFantasy
             }
             string lossReport = HandleDeathConsequences(endingId);
             UnlockInstabilityOnClear(endingId);
+            CheckCharacterGoals(endingId, "");
+            CheckMilestones();
             SaveProgress();
             SetBackground(endingId == "true_shachi" ? "castle" : "ending");
             SetPortrait(endingId == "final_observer_end" ? "final_observer" : endingId == "true_shachi" ? "shachi_avatar" : (endingId == "impossible_death" || endingId == "impossible_true") ? "impossible_one" : null);
             titleText.text = "END: " + endingTitle;
             areaText.text = "所持金 +" + moneyReward + " / 記憶片 +" + lastReward;
-            bodyText.text = endingBody + EndingCoda(endingId) + RegionalEndingEcho(endingId) + DeathHint(endingId) + lossReport + BuildNewspaper(endingId);
+            bodyText.text = endingBody + EndingCoda(endingId) + RegionalEndingEcho(endingId) + safeReturnReport + escapedGearReport + DeathHint(endingId) + lossReport + BuildNewspaper(endingId);
+            CaptureStoryText(bodyText.text);
             UpdateSideText();
             ClearChoices();
-            if (run != null && endingId != "return" && endingId != "normal_clear" && endingId != "true_shachi" && endingId != "impossible_true" && endingId != "final_observer_end")
+            if (run != null && !run.flags.Contains("death_gear_returned") && endingId != "return" && endingId != "normal_clear" && endingId != "true_shachi" && endingId != "impossible_true" && endingId != "final_observer_end")
                 AddChoiceButton("記憶定着\n装備を1つ倉庫へ", ShowMemoryAnchor);
             AddChoiceButton("次の周回へ", ShowCharacterSelect);
             AddChoiceButton("タイトルへ", ShowTitle);
       }
+        bool IsEscapeEnding(string endingId)
+        {
+            return endingId == "return" || endingId == "normal_clear" || endingId == "true_shachi" || endingId == "final_observer_end";
+        }
+        string StoreEscapedGear(string endingId)
+        {
+            if (run == null || !IsEscapeEnding(endingId))
+                return "";
+            var stored = new List<string>();
+            StoreEquippedGearIfPresent(run.weapon, stored);
+            StoreEquippedGearIfPresent(run.armor, stored);
+            StoreEquippedGearIfPresent(run.accessory, stored);
+            if (stored.Count == 0)
+                return "\n\n持ち帰り装備: 装備なし。";
+            return "\n\n持ち帰り装備: " + string.Join(" / ", stored) + " を倉庫へ戻した。";
+        }
+        void StoreEquippedGearIfPresent(Gear gear, List<string> stored)
+        {
+            if (gear == null || IsEmptyGear(gear))
+                return;
+            StoreGear(gear);
+            stored.Add(GearShortName(gear));
+        }
+        string ApplySafeReturnBonus(string endingId)
+        {
+            if (endingId == "return")
+            {
+                progress.memoryFragments += 1;
+                progress.insuranceTickets += 1;
+                lastReward += 1;
+                return "\n\n帰還ボーナス: 生きて戻った記録が定着した。記憶片+1 / 保険札+1。";
+            }
+            if (endingId == "normal_clear" || endingId == "true_shachi" || endingId == "final_observer_end")
+            {
+                progress.insuranceTickets += 1;
+                return "\n\n帰還ボーナス: 境界を越えた手順が保険札として残った。保険札+1。";
+            }
+            return "";
+        }
         int EndingMemoryReward(string endingId)
         {
             bool firstEnding = !progress.endings.Contains(endingId);
             if (!firstEnding)
                 return 0;
             if (endingId == "return")
-                return 2;
+                return 3;
             if (endingId == "true_shachi" || endingId == "normal_clear")
                 return 3;
             if (endingId == "final_observer_end")
@@ -5147,6 +6724,8 @@ namespace AichiFantasy
                     return "\n\n余韻: 朝礼のチャイムが鳴ると、あなたの部品番号だけが赤く点灯する。効率は上がった。帰り道は削除された。";
                 case "madness":
                     return "\n\n余韻: 見てはいけないものを見たのではない。見られる側に回ったのだ。以後、選択肢の文字が時々あなたを読む。";
+                case "event_death":
+                    return "\n\n余韻: 倒れた場所の床だけが、あなたの最後の足跡を少し長く覚えていた。";
                 case "impossible_true":
                     return "\n\n余韻: 観測記録の末尾に、あなたの筆跡ではない追記がある。『まだ勝利ではない。ただ、今回は存在し損ねた』。";
             }
@@ -5158,7 +6737,18 @@ namespace AichiFantasy
                 return "";
 
             string echo = "";
-            if (run.owari >= run.mikawa && run.owari >= run.npcAirport && run.owari > 0)
+            int stageNo = CurrentStageNoForEcho();
+            if (stageNo == 1)
+                echo = "STAGE 1の余韻: 地下街の柱番号、きしめんの湯気、消えかけた出口案内が、次の周回まで薄く残った。";
+            else if (stageNo == 2)
+                echo = "STAGE 2の余韻: 城下の水音と金色の視線が、まだ天井の向こうを泳いでいる。";
+            else if (stageNo == 3)
+                echo = "STAGE 3の余韻: 発酵音と工程表の拍が、心拍に混じって一拍だけ遅れて鳴り続ける。";
+            else if (stageNo == 4)
+                echo = "STAGE 4の余韻: 潮の匂いと濡れた星図が、足元の暗がりにまだ沈んでいる。";
+            else if (stageNo == 5)
+                echo = "STAGE 5の余韻: 手荷物タグと欠航案内が、空港の奥で短く点滅している。";
+            else if (run.owari >= run.mikawa && run.owari >= run.npcAirport && run.owari > 0)
                 echo = "尾張方面の余韻: 金鯱の影、織物の糸、城下の水拍子が、帰還後もしばらく視界の端で同じ向きに揺れている。";
             else if (run.mikawa >= run.owari && run.mikawa >= run.npcAirport && run.mikawa > 0)
                 echo = "三河方面の余韻: 味噌蔵の発酵音と工場ラインの拍が、心拍に混じって一拍だけ遅れて鳴り続ける。";
@@ -5175,6 +6765,31 @@ namespace AichiFantasy
 
             return "\n\n" + echo;
         }
+        int CurrentStageNoForEcho()
+        {
+            if (run == null)
+                return 0;
+            int stageNo = StageNoFromSceneId(run.sceneId);
+            if (stageNo > 0)
+                return stageNo;
+            stageNo = StageNoFromSceneId(run.battleReturnScene);
+            if (stageNo > 0)
+                return stageNo;
+            return StageNoFromSceneId(run.pendingSceneAfterRandom);
+        }
+        int StageNoFromSceneId(string sceneId)
+        {
+            if (string.IsNullOrEmpty(sceneId) || !sceneId.StartsWith("stage"))
+                return 0;
+            int start = "stage".Length;
+            int end = start;
+            while (end < sceneId.Length && char.IsDigit(sceneId[end]))
+                end++;
+            int stageNo;
+            if (end == start || !int.TryParse(sceneId.Substring(start, end - start), out stageNo))
+                return 0;
+            return Mathf.Clamp(stageNo, 1, 5);
+        }
         string HandleDeathConsequences(string endingId)
         {
             if (run == null || endingId == "return" || endingId == "normal_clear" || endingId == "true_shachi")
@@ -5188,7 +6803,16 @@ namespace AichiFantasy
             if (progress.insuranceTickets > 0)
             {
                 progress.insuranceTickets--;
-                return "\n\n保険札が燃え、装備の輪郭を一つだけ現実へ繋ぎ止めた。";
+                string storedByInsurance = StoreBestDeathGear("保険札");
+                return string.IsNullOrEmpty(storedByInsurance)
+                    ? "\n\n保険札が燃えたが、持ち帰れる装備はなかった。"
+                    : "\n\n保険札が燃え、" + storedByInsurance + " を倉庫へ繋ぎ止めた。";
+            }
+            string bonusReturn = ApplyDeathGearReturnBonus();
+            if (!string.IsNullOrEmpty(bonusReturn))
+            {
+                run.flags.Add("death_gear_returned");
+                return bonusReturn;
             }
             double breakChance = HasGearEffect("memory_anchor") ? 0.18 : 0.35;
             if (rng.NextDouble() < breakChance)
@@ -5207,6 +6831,46 @@ namespace AichiFantasy
                 }
             }
             return "\n\n装備は異界に残された。記憶定着できたものはない。";
+        }
+        string ApplyDeathGearReturnBonus()
+        {
+            if (run == null || progress.deathGearReturnLevel <= 0)
+                return "";
+            if (progress.deathGearReturnLevel >= 3)
+            {
+                var stored = new List<string>();
+                StoreEquippedGearIfPresent(run.weapon, stored);
+                StoreEquippedGearIfPresent(run.armor, stored);
+                StoreEquippedGearIfPresent(run.accessory, stored);
+                if (stored.Count == 0)
+                    return "";
+                return "\n\n帰還保証Lv3: " + string.Join(" / ", stored) + " を倉庫へ戻した。";
+            }
+            double chance = progress.deathGearReturnLevel == 1 ? 0.35 : 0.70;
+            if (rng.NextDouble() >= chance)
+                return "";
+            string storedOne = StoreBestDeathGear("帰還保証");
+            return string.IsNullOrEmpty(storedOne) ? "" : "\n\n帰還保証Lv" + progress.deathGearReturnLevel + ": " + storedOne + " を倉庫へ戻した。";
+        }
+        string StoreBestDeathGear(string reason)
+        {
+            Gear best = null;
+            if (!IsEmptyGear(run.weapon))
+                best = run.weapon;
+            if (!IsEmptyGear(run.armor) && GearDeathReturnScore(run.armor) > GearDeathReturnScore(best))
+                best = run.armor;
+            if (!IsEmptyGear(run.accessory) && GearDeathReturnScore(run.accessory) > GearDeathReturnScore(best))
+                best = run.accessory;
+            if (IsEmptyGear(best))
+                return "";
+            StoreGear(best);
+            return GearShortName(best);
+        }
+        int GearDeathReturnScore(Gear gear)
+        {
+            if (gear == null)
+                return -1;
+            return gear.score + gear.attack + gear.defense + gear.speed + gear.luck;
         }
         void ShowMemoryAnchor()
         {
@@ -5236,12 +6900,12 @@ namespace AichiFantasy
                 ? run.character.name + "、" + InstabilityName(run.instability) + "から生還"
                 : run.character.name + "、" + EndingName(endingId) + "により消息不明";
             string route = run.mikawa > run.owari ? "岡崎方面で樽鳴り増加" : "名古屋方面で鯱の影を観測";
-            string boss = progress.bossesDefeated.Count > 0 ? "撃破済みボス: " + string.Join(", ", progress.bossesDefeated) : "ボス討伐記録なし";
-            return "\n\n異界愛知日報\n" + headline + "\n" + route + "\n" + boss + "\n獲得記憶片: " + lastReward;
+            return "\n\n異界愛知日報\n" + headline + "\n" + route + "\n獲得記憶片: " + lastReward;
         }
         void ShowUnlocks()
         {
             mode = Mode.Unlocks;
+            CheckMilestones();
             SetBackground("characters");
             SetPortrait("event_occult_researcher");
             titleText.text = "図鑑と解放";
@@ -5275,13 +6939,59 @@ namespace AichiFantasy
                 text += "・" + progress.regretLog[i] + "\n";
             bodyText.text = text;
             statsText.text = "";
-            inventoryText.text = "破損装備:\n" + BrokenGearSummary() + "\n\n実績:\n黄色撃破 " + progress.piyorinVictories + "\n味噌撃破 " + progress.misoVictories + "\n検査官撃破 " + progress.gateVictories;
+            inventoryText.text = "破損装備:\n" + BrokenGearSummary() + "\n\n実績:\n" + AchievementCounterLine() + "\n黄色撃破 " + progress.piyorinVictories + "\n味噌撃破 " + progress.misoVictories + "\n検査官撃破 " + progress.gateVictories;
             battleRoot.gameObject.SetActive(false);
             choiceRoot.gameObject.SetActive(true);
             ClearChoices();
+            AddChoiceButton("実績を見る\n記憶片報酬", ShowAchievements);
+            AddChoiceButton("個人目標を見る\nキャラ別報酬", ShowCharacterGoals);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void ShowCharacterGoals()
+        {
+            mode = Mode.Unlocks;
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            titleText.text = "個人目標";
+            areaText.text = "キャラクター別の挑戦";
+            bodyText.text = BuildCharacterGoalSummary();
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n保険札 " + progress.insuranceTickets;
+            inventoryText.text = "達成すると自動で記憶片を獲得します。\n\nキャラ選択画面でも各キャラの目標を確認できます。";
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            ClearChoices();
+            AddChoiceButton("図鑑と解放へ戻る", ShowUnlocks);
             AddChoiceButton("キャラ選択へ", ShowCharacterSelect);
-            AddChoiceButton("保険札を買う\n記憶片10", BuyInsurance);
-            AddChoiceButton("戻る", ShowTitle);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        void ShowAchievements()
+        {
+            mode = Mode.Unlocks;
+            CheckMilestones();
+            SetBackground("characters");
+            SetPortrait("event_occult_researcher");
+            titleText.text = "実績";
+            areaText.text = "達成報酬";
+            bodyText.text = BuildAchievementSummary();
+            statsText.text = "記憶片 " + progress.memoryFragments + "\n保険札 " + progress.insuranceTickets;
+            inventoryText.text = "達成すると自動で報酬を受け取ります。\n\n" + AchievementCounterLine();
+            battleRoot.gameObject.SetActive(false);
+            choiceRoot.gameObject.SetActive(true);
+            ClearChoices();
+            AddChoiceButton("図鑑と解放へ戻る", ShowUnlocks);
+            AddChoiceButton("キャラ選択へ", ShowCharacterSelect);
+            AddChoiceButton("タイトルへ", ShowTitle);
+        }
+        string AchievementCounterLine()
+        {
+            var list = AchievementDefinitions();
+            int claimed = 0;
+            foreach (var achievement in list)
+            {
+                if (progress.milestoneClaims.Contains(achievement.id))
+                    claimed++;
+            }
+            return claimed + "/" + list.Count + " 受取済";
         }
         void BuyInsurance()
         {
@@ -5295,7 +7005,7 @@ namespace AichiFantasy
             progress.insuranceTickets++;
             SaveProgress();
             Play(rewardSfx);
-         ShowUnlocks();
+            ShowBaseHub();
         }
         string BrokenGearSummary()
         {
@@ -5379,8 +7089,7 @@ namespace AichiFantasy
             }
             if (hpText != null)
                 hpText.text = s.hp + "/" + s.maxHp;
-            if (coinText != null)
-                coinText.text = "所持金 " + s.money;
+            UpdateCurrencyText();
             if (statsText != null)
                 statsText.fontSize = 14;
             statsText.text =
@@ -5399,9 +7108,9 @@ namespace AichiFantasy
                 "武器: " + GearSummary(run.weapon) + "\n\n" +
                 "防具: " + GearSummary(run.armor) + "\n\n" +
                 "装飾: " + GearSummary(run.accessory) + "\n\n" +
-                "所持金 " + s.money + "\n" +
+                "所持金 " + s.money + " / SAN " + s.sanity + "/" + s.maxSanity + " / 保険札 " + progress.insuranceTickets + "\n" +
                 "神話理解 " + s.mythosKnowledge + " / 汚染 " + s.mythosCorruption + "\n" +
-                "空港 " + run.npcAirport + " / 地元 " + s.localKnowledge + " / 危険 " + run.dangerWarnings + "\n" +
+                "空港 " + run.npcAirport + " / 地元 " + s.localKnowledge + " / 危険察知 " + run.dangerWarnings + "\n" +
                 InstabilityName(run.instability) + " / 保険札 " + progress.insuranceTickets + "\n" +
                 "死因 " + progress.deaths.Count + " / 怪異 " + progress.seenMonsters.Count + "\n\n" +
                 SanityFlavor();
@@ -5409,13 +7118,18 @@ namespace AichiFantasy
                 "武器: " + GearSideSummary(run.weapon) + "\n" +
                 "防具: " + GearSideSummary(run.armor) + "\n" +
                 "装飾: " + GearSideSummary(run.accessory) + "\n\n" +
-                "所持金 " + s.money + "\n" +
-                InstabilityName(run.instability) + " / 保険札 " + progress.insuranceTickets + "\n" +
+                "所持金 " + s.money + " / SAN " + s.sanity + "/" + s.maxSanity + " / 保険札 " + progress.insuranceTickets + "\n" +
+                InstabilityName(run.instability) + "\n" +
                 (string.IsNullOrEmpty(EquippedEffectSummary()) ? "" : "特殊効果 " + EquippedEffectSummary() + "\n") +
                 "死因 " + progress.deaths.Count + " / 怪異 " + progress.seenMonsters.Count + "\n\n" +
                 "最近の出来事\n" + RecentLogText();
             if (statusModalRoot != null && statusModalRoot.gameObject.activeSelf)
                 RefreshStatusModalText();
+        }
+        void UpdateCurrencyText()
+        {
+            if (coinText != null && progress != null)
+                coinText.text = "記憶片 " + progress.memoryFragments + "  券 " + progress.gachaTickets + "  結晶 " + progress.statCrystals + "  欠片 " + progress.legendaryShards;
         }
         void UpdateMadnessVisuals()
         {
@@ -5513,13 +7227,27 @@ namespace AichiFantasy
         {
             if (gear == null || IsEmptyGear(gear))
                 return "装備なし";
-            return gear.name + " [" + gear.slot + "]";
+            return GearDisplayName(gear) + " [" + gear.slot + "]";
         }
         string GearSideSummary(Gear gear)
         {
             if (gear == null || IsEmptyGear(gear))
                 return "なし";
-            return gear.name + " " + GearStatLine(gear);
+            return GearDisplayName(gear) + " " + GearStatLine(gear);
+        }
+        string GearDisplayName(Gear gear)
+        {
+            if (gear == null || IsEmptyGear(gear))
+                return "装備なし";
+            return "<color=" + GearRarityColor(gear.rarity) + ">" + gear.name + "</color>";
+        }
+        string GearRarityColor(string rarity)
+        {
+            if (rarity == "橙") return "#ff9f38";
+            if (rarity == "紫") return "#c58cff";
+            if (rarity == "緑") return "#74e28a";
+            if (rarity == "白") return "#f1f1e6";
+            return "#f1f1e6";
         }
         string GearStatLine(Gear gear)
         {
@@ -6016,7 +7744,7 @@ namespace AichiFantasy
                 text = "この周回の大きな目的は、名駅の底から愛知各地を経由して空港境界へ向かい、帰還または別種のENDへ到達すること。\n\n空港へ向かうには、空港知識、地元知識、危険察知のどれかを十分に集める。STAGE踏破でも空港ゲートへ近づける。\n\n同じ行動は周回内で枯れる。失敗で得た記憶片や図鑑情報を次の周回へ持ち越し、危険な近道を学ぶのが基本になる。\n\n地元知識は安全な近道と回避に効く。鯱注視は尾張と空港の道標になるが、溜まりすぎると強い怪異にも見つかる。",
                 choices =
                 {
-                    new Choice { label = "空港へ向かう条件を見る\n空港2/地元4/危険2", next = "meieki_goal", effect = r => { r.dangerWarnings += 1; } },
+                    new Choice { label = "空港へ向かう条件を見る\n空港2/地元4/危険察知2", next = "meieki_goal", effect = r => { r.dangerWarnings += 1; } },
                     new Choice { label = "地元知識の使い道を見る\n地元+1", next = "meieki_goal", effect = r => { r.stats.localKnowledge += 1; } },
                     new Choice { label = "鯱注視の意味を見る\n鯱+1", next = "meieki_goal", effect = r => { r.shachiGaze += 1; } },
                     new Choice { label = "空港へ向かう", next = "airport_bridge", condition = r => r.npcAirport >= 2 || r.stats.localKnowledge >= 4 || r.dangerWarnings >= 2, disabledReason = "空港へ安全に向かう準備が足りない", effect = r => { r.freedomRegion = ""; } },
@@ -6257,7 +7985,7 @@ namespace AichiFantasy
                 text = "路線図職人は、白紙の切符に今回の目的を書けと言う。\n\n目的を決めると、道は少し狭くなる。そのぶん報酬と危険の形がはっきりする。",
                 choices =
                 {
-                    new Choice { label = "空港帰還を狙う\n空港+2/危険+1", next = "nagoya_after_battle", effect = r => { r.routeGoal = "airport_return"; r.npcAirport += 2; r.dangerWarnings += 1; } },
+                    new Choice { label = "空港帰還を狙う\n空港+2/危険察知+1", next = "nagoya_after_battle", effect = r => { r.routeGoal = "airport_return"; r.npcAirport += 2; r.dangerWarnings += 1; } },
                     new Choice { label = "双鯱調停を狙う\n鯱+2/神話+1", next = "nagoya_after_battle", effect = r => { r.routeGoal = "shachi_true"; r.shachiGaze += 2; r.stats.mythosKnowledge += 1; } },
                     new Choice { label = "地方深層ENDを狙う\n地元+2/神話+1", next = "nagoya_after_battle", effect = r => { r.routeGoal = "regional_deep"; r.stats.localKnowledge += 2; r.stats.mythosKnowledge += 1; } },
                     new Choice { label = "生存重視で進む\n危険察知+3/攻撃-1", next = "nagoya_after_battle", effect = r => { r.routeGoal = "survive"; r.dangerWarnings += 3; r.stats.attack = Math.Max(1, r.stats.attack - 1); } },
@@ -6369,14 +8097,15 @@ namespace AichiFantasy
                     area = areas[stage] + " / 開始地点",
                     image = images[stage],
                     portrait = portraits[stage],
-                    text = StageHubIntro(stageNo) + "\n\nここから十の出来事を越える。途中の選択でHP、所持金、LUK、SAN、神話理解が削られ、また強くなる。\n\nSTAGEボスは地方深層の先ではなく、このステージ内のボスゲートにいる。十の出来事を越えるか、近道でボス地点へ急げば到達できる。",
-                    choices =
-                    {
-                        new Choice { label = "探索を始める", next = first },
+                    text = StageHubIntro(stageNo) + "\n\nここから十の出来事を越える。ルートの危険度で敵の強さ、判定の重さ、報酬の方向が変わる。\n\n低危険は消耗が軽く報酬は控えめ。中危険は装備と所持金が増えやすい。高危険はSANを削るが神話理解と大きな報酬に近い。\n\nSTAGEボスはこのステージ内のボスゲートにいる。十の出来事を越えるか、近道でボス地点へ急げば到達できる。",
+                choices =
+                {
+                        new Choice { label = "正規路を進む\n低危険: 判定軽め/報酬控えめ", next = first, effect = r => { SetStageRoute(r, stageNo, "main"); } },
+                        new Choice { label = "脇道を選ぶ\n中危険: 装備・所持金寄り", next = first, effect = r => { SetStageRoute(r, stageNo, "side"); } },
+                        new Choice { label = "禁じ札を追う\n高危険: 神話・高報酬寄り", next = first, effect = r => { SetStageRoute(r, stageNo, "forbidden"); } },
                         new Choice { label = "ステージ内ショップ\n周回強化", next = "stage" + stageNo + "_shop" },
                         new Choice { label = "息を整える\nHP+3/SAN+1", next = first, effect = r => { r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 3); r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 1); } },
-                        new Choice { label = "不吉な近道\n神話+1/SAN-2", next = first, effect = r => { r.stats.mythosKnowledge += 1; r.stats.sanity = Math.Max(0, r.stats.sanity - 2); } },
-                        new Choice { label = "STAGEボス地点へ急ぐ\n危険察知+1", next = "stage" + stageNo + "_boss_gate", effect = r => { r.dangerWarnings += 1; StageReward(r, stageNo, 9, false); } }
+                        new Choice { label = "STAGEボス地点へ急ぐ\n危険察知+1", next = "stage" + stageNo + "_boss_gate", effect = r => { SetStageRoute(r, stageNo, "shortcut"); r.dangerWarnings += 1; StageReward(r, stageNo, 9, false); } }
                     }
                 };
                 AddStageShopScene(stageNo, "stage" + stageNo + "_shop", hub, titles[stage], areas[stage], images[stage]);
@@ -6408,7 +8137,7 @@ namespace AichiFantasy
                 area = area + " / " + stageTitle,
                 image = image,
                 portrait = StageShopPortrait(stageNo),
-                text = StageShopText(stageNo) + "\n\nここで買った強化はこの周回の体にだけ残る。帰れなければ、代金の重さだけが記憶に沈む。",
+                text = StageShopText(stageNo) + "\n\nここで買った強化はこの周回の体にだけ残る。土地装備は、そのSTAGEの土地性に合うランダム装備を即装備する買い物。現在装備している同じ部位は外れ、開始前準備に戻らない限り倉庫へは戻らない。\n\n帰れなければ、代金の重さだけが記憶に沈む。",
                 choices =
                 {
                     new Choice { label = "救急封筒\n所持金-" + careCost + "/最大HP+4/SAN+2", next = id, condition = r => r.stats.money >= careCost, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= careCost; r.stats.maxHp += 4; r.stats.hp = Math.Min(r.stats.maxHp, r.stats.hp + 6); r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 2); r.pendingOutcomeText = "封筒の中身は湿っていたが、体は少しだけ戻った。"; } },
@@ -6416,7 +8145,7 @@ namespace AichiFantasy
                     new Choice { label = "防護札\n所持金-" + guardCost + "/防御+2", next = id, condition = r => r.stats.money >= guardCost, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= guardCost; r.stats.defense += 2; r.pendingOutcomeText = "札は服の内側に貼りつき、剥がすまで肌の一部になった。"; } },
                     new Choice { label = "曲がった方位具\n所持金-" + toolCost + "/速さ+1/LUK+1", next = id, condition = r => r.stats.money >= toolCost, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= toolCost; r.stats.speed += 1; r.stats.luck += 1; r.pendingOutcomeText = "針は北を指さない。あなたがまだ死んでいない方角だけを指す。"; } },
                     new Choice { label = "遮断札\n所持金-" + wardCost + "/次戦初撃軽減", next = id, condition = r => r.stats.money >= wardCost, disabledReason = "所持金が足りない", effect = r => { r.stats.money -= wardCost; r.flags.Add("shop_first_hit_guard"); r.pendingOutcomeText = "札の中央に、小さな空白が開いた。次の戦闘の初撃だけ、そこへ落とせる。"; } },
-                    new Choice { label = "土地装備を買う\n所持金-" + gearCost, next = id, condition = r => r.stats.money >= gearCost, disabledReason = "所持金が足りない", effect = r => { BuyStageShopGear(r, stageNo, gearCost); } },
+                    new Choice { label = "土地装備を買う\n所持金-" + gearCost + "/即装備", next = id, condition = r => r.stats.money >= gearCost, disabledReason = "所持金が足りない", effect = r => { BuyStageShopGear(r, stageNo, gearCost); } },
                     new Choice { label = "戻る", next = returnScene }
                 }
             };
@@ -6451,7 +8180,8 @@ namespace AichiFantasy
             Gear gear = GenerateRandomGear(10 + stageNo * 7 + r.instability * 3);
             Gear current = CurrentGearForSlot(gear.slot);
             EquipGear(gear);
-            r.pendingOutcomeText = "購入装備: " + GearShortName(gear) + "\n" + GearDeltaLine(gear, current) + "\n" + GearStrengthReason(gear);
+            string previous = current == null || IsEmptyGear(current) ? "同部位の装備なし" : "外れた装備: " + GearShortName(current);
+            r.pendingOutcomeText = "土地装備を即装備した。\n購入装備: " + GearShortName(gear) + "\n" + previous + "\n変化: " + GearDeltaLine(gear, current) + "\n狙い: " + GearStrengthReason(gear);
             LogRun("ショップ装備購入: " + GearShortName(gear));
         }
        void AddStageEventScene(int stageNo, int index, string stageTitle, string area, string image, string portrait, string bossId)
@@ -6499,6 +8229,72 @@ namespace AichiFantasy
             }
             AddAirportFinalApproach();
         }
+        void SetStageRoute(RunState r, int stageNo, string route)
+        {
+            if (r == null)
+                return;
+            string prefix = "stage_route_" + stageNo + "_";
+            r.flags.Remove(prefix + "main");
+            r.flags.Remove(prefix + "side");
+            r.flags.Remove(prefix + "forbidden");
+            r.flags.Remove(prefix + "shortcut");
+            r.flags.Add(prefix + route);
+            if (route == "side")
+            {
+                r.stats.money += 80 + stageNo * 20;
+                r.dangerWarnings += 1;
+                r.pendingOutcomeText = "脇道に入った。拾えるものは増えるが、敵も少し濃くなる。";
+            }
+            else if (route == "forbidden")
+            {
+                r.stats.mythosKnowledge += 1;
+                r.stats.sanity = Math.Max(0, r.stats.sanity - (1 + stageNo / 2));
+                r.pendingOutcomeText = "禁じ札の文字が、一瞬だけあなたの筆跡になった。";
+            }
+            else if (route == "shortcut")
+            {
+                r.stats.hp = Math.Max(1, r.stats.hp - Math.Max(1, stageNo - 1));
+                r.pendingOutcomeText = "近道は短い。短いぶん、床がこちらを覚えている。";
+            }
+            else
+            {
+                r.pendingOutcomeText = "正規路の明かりは弱いが、まだ人の歩幅を保っている。";
+            }
+        }
+        string StageRouteKey(int stageNo)
+        {
+            if (run == null)
+                return "main";
+            string prefix = "stage_route_" + stageNo + "_";
+            if (run.flags.Contains(prefix + "forbidden")) return "forbidden";
+            if (run.flags.Contains(prefix + "side")) return "side";
+            if (run.flags.Contains(prefix + "shortcut")) return "shortcut";
+            return "main";
+        }
+        string StageRouteFlavor(int stageNo)
+        {
+            switch (StageRouteKey(stageNo))
+            {
+                case "side":
+                    return "今いるのは脇道だ。道具と小銭は落ちているが、壁の向こうの足音も近い。";
+                case "forbidden":
+                    return "禁じ札の道に入っている。神話は読みやすいが、正気の縁は薄い。";
+                case "shortcut":
+                    return "近道の途中だ。ボスゲートは近いが、準備できる余白はほとんどない。";
+                default:
+                    return "正規路の灯りが続く。危険は読めるが、得られるものも控えめだ。";
+            }
+        }
+        int StageRouteDifficultyOffset(int stageNo)
+        {
+            switch (StageRouteKey(stageNo))
+            {
+                case "side": return 1;
+                case "forbidden": return 2;
+                case "shortcut": return 2 + stageNo / 2;
+                default: return 0;
+            }
+        }
         SceneDef BuildRuntimeStageEventScene(string sceneId, SceneDef baseScene)
         {
             if (run == null)
@@ -6511,7 +8307,7 @@ namespace AichiFantasy
                 run.stageSeed = rng.Next(100000, 999999);
             int eventNo = index + 1;
             int variant = RuntimeStageVariant(stageNo, index, 0);
-            int choiceVariant = RuntimeStageVariant(stageNo, index, 1) % 3;
+            int choiceVariant = (RuntimeStageVariant(stageNo, index, 1) + StageRouteDifficultyOffset(stageNo)) % 3;
             string next = index < 9 ? "stage" + stageNo + "_event_" + (index + 1) : "stage" + stageNo + "_boss_gate";
             string enemyId = "stage" + stageNo + "_enemy_" + eventNo;
             SceneDef scene = new SceneDef
@@ -6520,8 +8316,8 @@ namespace AichiFantasy
                 title = "STAGE " + stageNo + "-" + eventNo + ": " + RuntimeStageEventTitle(stageNo, index, variant),
                 area = baseScene.area,
                 image = RuntimeStageEventImage(stageNo, baseScene.image, variant),
-                portrait = RuntimeStageEventPortrait(stageNo, baseScene.portrait, variant),
-                text = RuntimeStageEventMotif(stageNo, index, variant) + "\n\n" + RuntimeStageEventOmen(stageNo, index, variant)
+                portrait = RuntimeStageEventPortrait(stageNo, index, baseScene.portrait),
+                text = TrimEventBlankLines(RuntimeStageEventMotif(stageNo, index, variant) + "\n" + StageRouteFlavor(stageNo) + "\n" + RuntimeStageEventOmen(stageNo, index, variant))
             };
             scene.choices.AddRange(RuntimeStageEventChoices(stageNo, index, next, enemyId, choiceVariant));
             return scene;
@@ -6561,13 +8357,25 @@ namespace AichiFantasy
                 return "stage_airport_service";
             return baseImage;
         }
-        string RuntimeStageEventPortrait(int stageNo, string basePortrait, int variant)
+        string RuntimeStageEventPortrait(int stageNo, int index, string basePortrait)
         {
-            if (variant == 1)
-                return "stage_route_attendant";
-            if ((variant == 2 || variant == 3) && stageNo >= 4)
-                return "stage_quarantine_clerk";
-            return basePortrait;
+            string[,] portraits =
+            {
+                { "event_subway_child", "event_locker_keeper", "event_memory_locker_keeper", "event_route_cartographer", "event_occult_researcher", "event_cafe_server", "event_kishimen_owner", "event_memory_vendor", "stage_route_attendant", "event_locker_keeper" },
+                { "event_atsuta_miko", "event_shachi_avatar", "event_black_torii_miko", "event_sakae_broker", "event_seto_potter", "event_inuyama_mask", "event_arimatsu_weaver", "event_battlefield_monk", "event_osu_signal_hacker", "event_shachi_avatar" },
+                { "event_miso_voice", "event_koji_bride", "event_factory_inspector", "event_chiryu_puppeteer", "event_handa_brewer", "event_battlefield_monk", "event_black_torii_miko", "event_osu_signal_hacker", "event_miso_voice", "event_factory_inspector" },
+                { "event_gamagori_diver", "event_fog_ferry_pilot", "event_handa_brewer", "event_tea_medium", "event_laguna_actor", "event_under_runway_clerk", "event_gate_inspector", "event_gamagori_diver", "event_fog_ferry_pilot", "event_laguna_actor" },
+                { "event_gate_inspector", "event_under_runway_clerk", "stage_quarantine_clerk", "event_fog_ferry_pilot", "event_gamagori_diver", "boundary_airport_director", "event_gate_inspector", "stage_route_attendant", "stage_quarantine_clerk", "boundary_airport_director" }
+            };
+            if (stageNo >= 1 && stageNo <= 5 && index >= 0 && index <= 9)
+            if (stageNo >= 1 && stageNo <= 5 && index >= 0 && index <= 9)
+            {
+                string uniquePortrait = "event_unique_stage" + stageNo + "_event_" + index;
+                if (HasPortraitTexture(uniquePortrait))
+                    return uniquePortrait;
+                return portraits[stageNo - 1, index];
+            }
+            return string.IsNullOrEmpty(basePortrait) ? "event_occult_researcher" : basePortrait;
         }
         string RuntimeStageEventTitle(int stageNo, int index, int variant)
         {
@@ -6629,7 +8437,7 @@ namespace AichiFantasy
                 return new List<Choice>
                 {
                     new Choice { label = "息を殺して通る\nSAN+1/所持金-80", next = next, effect = r => { if (r.stats.money >= 80) { r.stats.money -= 80; r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 1); r.pendingOutcomeText = "音を立てずに通った。背後で、誰かの舌打ちだけが残った。"; } else { r.stats.hp = Math.Max(1, r.stats.hp - 2); r.stats.sanity = Math.Min(r.stats.maxSanity, r.stats.sanity + 1); r.pendingOutcomeText = "足りない分を血で払った。通路はそれで黙った。"; } StageReward(r, stageNo, index, false); } },
-                    new Choice { label = "踏み込む\nLUK判定", next = next, effect = r => { int target = 12 + stageNo + index / 3; int roll = RollLuckDiceAgainst(target); if (roll >= target) { r.stats.luck += 1; r.stats.money += 80 + stageNo * 30; r.pendingOutcomeText = "出目が沈む前に掴んだ。影の財布から硬貨がこぼれた。"; StageReward(r, stageNo, index, true); } else { r.stats.hp = Math.Max(1, r.stats.hp - (1 + stageNo)); r.stats.sanity = Math.Max(0, r.stats.sanity - 1); r.pendingOutcomeText = "一歩深かった。床下のものが足首を覚えた。"; } } },
+                    new Choice { label = "踏み込む\nLUK判定", next = next, effect = r => { int target = 12 + stageNo + index / 3 + StageRouteDifficultyOffset(stageNo); int roll = RollLuckDiceAgainst(target); if (roll >= target) { r.stats.luck += 1; r.stats.money += 80 + stageNo * 30; r.pendingOutcomeText = "出目が沈む前に掴んだ。影の財布から硬貨がこぼれた。"; StageReward(r, stageNo, index, true); } else { r.stats.hp = Math.Max(1, r.stats.hp - (1 + stageNo)); r.stats.sanity = Math.Max(0, r.stats.sanity - 1); r.pendingOutcomeText = "一歩深かった。床下のものが足首を覚えた。"; } } },
                     new Choice { label = "名を読んで捻じる\n神話/SAN", next = next, condition = r => r.stats.mythosKnowledge >= stageNo - 1, disabledReason = "神話理解が足りない", effect = r => { r.stats.mythosKnowledge += 1; r.stats.mythosCorruption += index % 3 == 0 ? 1 : 0; r.stats.sanity = Math.Max(0, r.stats.sanity - (2 + stageNo / 2)); r.pendingOutcomeText = "読んだ名は、少しだけあなたの声になった。"; StageReward(r, stageNo, index, true); } },
                     new Choice { label = "呼ばれた影を迎撃する", battle = enemyId, effect = r => { r.battleReturnScene = next; } }
                 };
@@ -6639,7 +8447,7 @@ namespace AichiFantasy
                 return new List<Choice>
                 {
                     new Choice { label = "記録を破る\n危険察知+1/HP-1", next = next, effect = r => { r.dangerWarnings += 1; r.stats.hp = Math.Max(1, r.stats.hp - 1); r.pendingOutcomeText = "破れた紙片が逃げ道の形に散った。"; StageReward(r, stageNo, index, false); } },
-                    new Choice { label = "影を追い越す\nLUK判定", next = next, effect = r => { int target = 13 + stageNo + index / 4; int roll = RollLuckDiceAgainst(target); if (roll >= target) { r.stats.speed += 1; r.stats.money += 100 + stageNo * 35; r.pendingOutcomeText = "影より先に曲がった。遅れて来たものは壁にぶつかった。"; StageReward(r, stageNo, index, true); } else { r.stats.hp = Math.Max(1, r.stats.hp - stageNo); r.dangerWarnings += 1; r.pendingOutcomeText = "影はあなたの少し前にいた。"; } } },
+                    new Choice { label = "影を追い越す\nLUK判定", next = next, effect = r => { int target = 13 + stageNo + index / 4 + StageRouteDifficultyOffset(stageNo); int roll = RollLuckDiceAgainst(target); if (roll >= target) { r.stats.speed += 1; r.stats.money += 100 + stageNo * 35; r.pendingOutcomeText = "影より先に曲がった。遅れて来たものは壁にぶつかった。"; StageReward(r, stageNo, index, true); } else { r.stats.hp = Math.Max(1, r.stats.hp - stageNo); r.dangerWarnings += 1; r.pendingOutcomeText = "影はあなたの少し前にいた。"; } } },
                     new Choice { label = "供物を読む\n神話+1/SAN-2", next = next, condition = r => r.stats.mythosKnowledge >= Math.Max(0, stageNo - 2), disabledReason = "神話理解が足りない", effect = r => { r.stats.mythosKnowledge += 1; r.stats.sanity = Math.Max(0, r.stats.sanity - 2); r.pendingOutcomeText = "供物の向きが変わり、次の道だけが残った。"; StageReward(r, stageNo, index, true); } },
                     new Choice { label = "札を鳴らすものを斬る", battle = enemyId, effect = r => { r.battleReturnScene = next; } }
                 };
@@ -7630,6 +9438,7 @@ namespace AichiFantasy
             NormalizeProgress();
             PlayerPrefs.SetString(SaveKey, JsonUtility.ToJson(progress));
             PlayerPrefs.Save();
+            UpdateCurrencyText();
         }
         void NormalizeProgress()
         {
@@ -7655,13 +9464,25 @@ namespace AichiFantasy
                 progress.regretLog = new List<string>();
             if (progress.milestoneClaims == null)
                 progress.milestoneClaims = new List<string>();
+            if (progress.personalGoalClaims == null)
+                progress.personalGoalClaims = new List<string>();
+            if (progress.eventChainClaims == null)
+                progress.eventChainClaims = new List<string>();
+            if (progress.characterStatBoosts == null)
+                progress.characterStatBoosts = new List<string>();
+            if (progress.legendaryGearPurchases == null)
+                progress.legendaryGearPurchases = new List<string>();
             if (progress.warehouseGear == null)
                 progress.warehouseGear = new List<string>();
             if (progress.awakenedGear == null)
                 progress.awakenedGear = new List<string>();
             if (progress.rememberedChoices == null)
                 progress.rememberedChoices = new List<string>();
+            progress.gachaTickets = Mathf.Max(0, progress.gachaTickets);
+            progress.statCrystals = Mathf.Max(0, progress.statCrystals);
+            progress.legendaryShards = Mathf.Max(0, progress.legendaryShards);
             progress.maxInstabilityUnlocked = Mathf.Clamp(progress.maxInstabilityUnlocked, 0, 5);
+            progress.deathGearReturnLevel = Mathf.Clamp(progress.deathGearReturnLevel, 0, 3);
         }
         void ClearChoices()
         {
@@ -7789,8 +9610,8 @@ namespace AichiFantasy
             if (layout != null)
             {
                 bool sideCommands = IsSideCommandLayout();
-                layout.minHeight = sideCommands ? 68f : mobile ? 66f : 54f;
-                layout.preferredHeight = sideCommands ? 78f : mobile ? 76f : 62f;
+                layout.minHeight = sideCommands ? 68f : mobile ? 66f : 48f;
+                layout.preferredHeight = sideCommands ? 78f : mobile ? 76f : 54f;
             }
             LayoutRebuilder.ForceRebuildLayoutImmediate(button.GetComponent<RectTransform>());
             if (choiceContent != null)
@@ -7800,15 +9621,15 @@ namespace AichiFantasy
         }
         void CreateChoiceSlots()
         {
-            choiceButtons = new Button[16];
-            choiceButtonLabels = new Text[16];
+            choiceButtons = new Button[MaxChoiceButtonSlots];
+            choiceButtonLabels = new Text[MaxChoiceButtonSlots];
             for (int i = 0; i < choiceButtons.Length; i++)
             {
                 var parent = choiceContent != null ? choiceContent : choiceRoot;
                 var button = NewButton("Choice" + i, parent, "", new Color(0.12f, 0.095f, 0.13f), 16);
                 var layout = button.gameObject.AddComponent<LayoutElement>();
-                layout.minHeight = 54f;
-                layout.preferredHeight = 62f;
+                layout.minHeight = 48f;
+                layout.preferredHeight = 54f;
                 layout.flexibleWidth = 1f;
                 var text = button.GetComponentInChildren<Text>(true);
                 if (text != null)
@@ -7833,7 +9654,7 @@ namespace AichiFantasy
         }
         void EnsureChoiceSlots()
         {
-            bool needsCreate = choiceRoot == null || choiceContent == null || choiceButtons == null || choiceButtons.Length != 16 || choiceButtonLabels == null || choiceButtonLabels.Length != 16;
+            bool needsCreate = choiceRoot == null || choiceContent == null || choiceButtons == null || choiceButtons.Length != MaxChoiceButtonSlots || choiceButtonLabels == null || choiceButtonLabels.Length != MaxChoiceButtonSlots;
             if (!needsCreate)
             {
                 for (int i = 0; i < choiceButtons.Length; i++)
@@ -7863,6 +9684,16 @@ namespace AichiFantasy
                 var sprite = Resources.Load<Sprite>("AichiFantasy/Backgrounds/" + id);
                 if (sprite != null)
                     texture = sprite.texture;
+            }
+            if (texture == null && id != "event_boundary_fallback")
+            {
+                texture = Resources.Load<Texture2D>("AichiFantasy/Backgrounds/event_boundary_fallback");
+                if (texture == null)
+                {
+                    var fallbackSprite = Resources.Load<Sprite>("AichiFantasy/Backgrounds/event_boundary_fallback");
+                    if (fallbackSprite != null)
+                        texture = fallbackSprite.texture;
+                }
             }
             background.texture = texture != null ? texture : Texture2D.blackTexture;
             background.color = Color.white;
@@ -8092,6 +9923,7 @@ namespace AichiFantasy
             text.fontSize = size;
             text.fontStyle = style;
             text.color = color;
+            text.supportRichText = true;
             text.alignment = TextAnchor.MiddleLeft;
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
             text.verticalOverflow = VerticalWrapMode.Truncate;
@@ -8139,11 +9971,32 @@ namespace AichiFantasy
         {
             var root = NewObject<RectTransform>(name, parent);
             var bg = root.gameObject.AddComponent<Image>();
-            bg.color = new Color(0.08f, 0.075f, 0.085f, 0.95f);
-           var fillArea = NewObject<RectTransform>("Fill Area", root);
-            Anchor(fillArea, 0, 0, 1, 1, 4, 4, -4, -4);
+            bg.color = new Color(0.018f, 0.016f, 0.022f, 0.96f);
+            var backGlow = NewImage("BackGlow", root, new Color(fillColor.r, fillColor.g, fillColor.b, 0.12f));
+            Anchor(backGlow.rectTransform, 0, 0, 1, 1, 2, 2, -2, -2);
+            var innerShade = NewImage("InnerShade", root, new Color(0f, 0f, 0f, 0.34f));
+            Anchor(innerShade.rectTransform, 0, 0, 1, 0.46f, 3, 3, -3, 0);
+            for (int i = 1; i < 5; i++)
+            {
+                var tick = NewImage("Tick" + i, root, new Color(1f, 0.92f, 0.72f, 0.09f));
+                float x = i / 5f;
+                Anchor(tick.rectTransform, x, 0.16f, x, 0.84f, -1, 0, 1, 0);
+            }
+            var fillArea = NewObject<RectTransform>("Fill Area", root);
+            Anchor(fillArea, 0, 0, 1, 1, 5, 5, -5, -5);
             var fill = NewImage("Fill", fillArea, fillColor);
             Stretch(fill.rectTransform, 0, 0, 0, 0);
+            var fillShade = NewImage("FillShade", fill.transform, new Color(0f, 0f, 0f, 0.2f));
+            Anchor(fillShade.rectTransform, 0, 0, 1, 0.42f, 0, 0, 0, 0);
+            var fillGloss = NewImage("FillGloss", fill.transform, new Color(1f, 0.92f, 0.74f, 0.24f));
+            Anchor(fillGloss.rectTransform, 0, 0.58f, 1, 1, 0, 0, 0, 0);
+            var fillEdge = NewImage("FillEdge", fill.transform, new Color(1f, 0.96f, 0.74f, 0.42f));
+            Anchor(fillEdge.rectTransform, 0.985f, 0, 1, 1, 0, 0, 0, 0);
+            AddBorder(root, new Color(
+                Mathf.Clamp01(fillColor.r * 0.65f + 0.22f),
+                Mathf.Clamp01(fillColor.g * 0.65f + 0.22f),
+                Mathf.Clamp01(fillColor.b * 0.65f + 0.22f),
+                0.46f));
             var slider = root.gameObject.AddComponent<Slider>();
             slider.transition = Selectable.Transition.None;
             slider.fillRect = fill.rectTransform;
