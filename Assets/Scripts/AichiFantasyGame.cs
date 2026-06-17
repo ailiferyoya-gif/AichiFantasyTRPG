@@ -348,6 +348,7 @@ namespace AichiFantasy
         AudioClip ambientSfx;
         AudioClip walkSfx;
         AudioClip eventSfx;
+        Font uiFont;
         readonly Dictionary<string, CharacterDef> characters = new Dictionary<string, CharacterDef>();
         readonly Dictionary<string, Gear> gears = new Dictionary<string, Gear>();
         readonly Dictionary<string, SceneDef> scenes = new Dictionary<string, SceneDef>();
@@ -9913,8 +9914,16 @@ namespace AichiFantasy
         }
         Font UiFont()
         {
+            if (uiFont != null)
+                return uiFont;
+
+            uiFont = Resources.Load<Font>("AichiFantasy/Fonts/YuseiMagic-Regular");
+            if (uiFont != null)
+                return uiFont;
+
             string[] candidates = { "Yu Mincho", "Yu Mincho Demibold", "Yu Gothic", "Yu Gothic UI", "Meiryo", "MS Gothic", "Arial" };
-            return Font.CreateDynamicFontFromOSFont(candidates, 18);
+            uiFont = Font.CreateDynamicFontFromOSFont(candidates, 18);
+            return uiFont;
         }
         Text NewText(string name, Transform parent, int size, FontStyle style, Color color)
         {
