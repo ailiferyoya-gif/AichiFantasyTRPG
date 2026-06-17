@@ -74,7 +74,7 @@ namespace AichiFantasy.Editor
                 "codeUrl: buildUrl + \"/WebGL.wasm?v=\" + cacheBust,");
             html = html.Replace(
                 "        // config.devicePixelRatio = 1;",
-                "        config.devicePixelRatio = 1;");
+                "        config.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);");
             File.WriteAllText(indexPath, html);
         }
 
