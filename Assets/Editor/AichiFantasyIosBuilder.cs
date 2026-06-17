@@ -38,6 +38,8 @@ namespace AichiFantasy.Editor
             PlayerSettings.iOS.targetOSVersionString = "15.0";
             PlayerSettings.iOS.appleEnableAutomaticSigning = false;
 
+            AichiFantasyBuildAssetOptimizer.ConfigureForIos();
+
             if (Directory.Exists(buildPath))
                 Directory.Delete(buildPath, true);
             Directory.CreateDirectory(buildPath);
