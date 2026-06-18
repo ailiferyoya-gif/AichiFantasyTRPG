@@ -9917,6 +9917,10 @@ namespace AichiFantasy
             if (uiFont != null)
                 return uiFont;
 
+            uiFont = Resources.Load<Font>("AichiFantasy/Fonts/DotGothic16-Regular");
+            if (uiFont != null)
+                return uiFont;
+
             uiFont = Resources.Load<Font>("AichiFantasy/Fonts/YuseiMagic-Regular");
             if (uiFont != null)
                 return uiFont;
@@ -9940,8 +9944,8 @@ namespace AichiFantasy
             text.resizeTextMinSize = Mathf.Max(14, Mathf.RoundToInt(size * 0.78f));
             text.resizeTextMaxSize = size;
             var shadow = text.gameObject.AddComponent<Shadow>();
-            shadow.effectColor = new Color(0f, 0f, 0f, 0.78f);
-            shadow.effectDistance = new Vector2(1.6f, -1.6f);
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.48f);
+            shadow.effectDistance = new Vector2(1f, -1f);
             return text;
         }
               Image NewImage(string name, Transform parent, Color color)
